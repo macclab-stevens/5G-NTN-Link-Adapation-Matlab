@@ -1,0 +1,185 @@
+# This example configuration outlines how to configure the srsRAN Project gNB to create a single TDD cell
+# transmitting in band 78, with 20 MHz bandwidth and 30 kHz sub-c  addr: 127.0.0.1         # Localhost to reach Docker port mapping
+#  port: 55555              # Host port that maps to Telegrafrier-spacing. A USRP B200 is configured
+# as the RF frontend using split 8. Note in this example an external clock source is not used, so the sync
+# is not defined and the default is used
+
+# Autodetected card type: sysmoISIM-SJA5
+# Generated card parameters :
+#  > Name     : Magic
+#  > SMSP     : e1ffffffffffffffffffffffff0581005155f5ffffffffffff000000
+#  > ICCID    : 8949440000001380805
+#  > MCC/MNC  : 001/01
+#  > IMSI     : 001010000138080
+#  > Ki       : 4d56753bfd400a9560e7ccd4debca476
+#  > OPC      : 072bf504aaba377cbce5ecbde06f6b0a
+#  > ACC      : None
+#  > ADM1(hex): 3638313436363634
+#  > OPMODE   : None
+# Programming ...
+gnb_id: 411
+gnb_id_bit_length: 32
+cu_cp:
+  amf:
+    addr: 127.0.0.5
+    port: 38412
+    bind_addr: 127.0.0.5
+    supported_tracking_areas:
+      - tac: 1
+        plmn_list:
+          - plmn: "00101"
+            tai_slice_support_list:
+              - sst: 1
+  mobility:
+    trigger_handover_from_measurements: true                    # Set the CU-CP to trigger handover when neighbor cell measurements arrive
+    cells:                                                      # List of cells available for handover known to the cu-cp
+      - nr_cell_id: 0x19B0                                        # Cell ID for cell 1
+        periodic_report_cfg_id: 1                                 # Set the periodic report configuration ID for this cell
+        ncells:                                                   # Neighbor cell(s) available for handover
+          - nr_cell_id: 0x19B1                                      # Cell ID of neighbor cell available for handover
+            report_configs: [ 2 ]                                   # Report configurations to configure for this neighbor cell
+      - nr_cell_id: 0x19B1                                        # Cell ID for cell 2
+        periodic_report_cfg_id: 1                                 # Set the periodic report configuration ID for this cell
+        ncells:                                                   # Neighbor cell(s) available for handover
+          - nr_cell_id: 0x19B0                                      # Cell ID of neighbor cell available for handover
+            report_configs: [ 2 ]                                   # Report configurations to configure for this neighbor cell
+    report_configs:                                             # Sets the report configuration for triggering handover
+      - report_cfg_id: 1                                          # Report config ID 1
+        report_type: periodical                                   # Sets the report type as periodical
+        report_interval_ms: 480                                  # Optional UINT (1024). The report interval in ms. Supported: [120, 240, 480, 640, 1024, 2048, 5120, 10240, 20480, 40960, 60000, 360000, 720000, 1800000]. 
+      - report_cfg_id: 2                                          # Report config ID 2
+        report_type: event_triggered                              # Sets the report type as event triggered
+        event_triggered_report_type: a3                           # Sets the event triggered report type as A3
+        meas_trigger_quantity: rsrp                               # Sets the measurement trigger quantity as rsrp
+        meas_trigger_quantity_offset_db: 3                        # Sets the measurement trigger quantity offset to 3dB
+        hysteresis_db: 0                                          # Sets the hysteresis to 0dB
+        time_to_trigger_ms: 100                                   # Sets the time to trigger to 100ms
+
+# cells:
+#   -
+#     pci: 1
+#     prach:
+#       prach_root_sequence_index: 0
+#   -
+#     pci: 2
+#     prach:
+#       prach_root_sequence_index: 64        
+      
+ru_sdr:
+  device_driver: uhd
+  device_args: type=b200,serial=315AF4C,num_recv_frames=64,num_send_frames=64
+  srate: 23.04
+  otw_format: sc12
+  tx_gain: 62 #80
+  rx_gain: 3 #64
+  clock: external
+  # sync: external
+  # time_alignment_calibration: 0
+
+cell_cfg:
+  # dl_arfcn: 632628 #3489.42MHz
+  # dl_arfcn: 623484 #3352.26MHz
+  # dl_arfcn: 156000 #780.5MHz
+  dl_arfcn: 627340  #B78 3410.1MHz
+  band: 78
+  channel_bandwidth_MHz: 20
+  common_scs: 30
+  plmn: "00101"
+  tac: 1
+  pci: 1
+
+  pucch:
+    p0_nominal: -84
+
+  ssb:
+    # ssb_period: 10                          # Optional UINT (10). Sets the period of SSB scheduling in milliseconds. Supported: [5, 10, 20].
+    ssb_block_power_dbm: -25 #-25
+
+  pusch:
+    mcs_table: qam256                        # Optional TEXT (qam64). Sets the MCS table to use for PUSCH. Supported: [qam64, qam256].
+  
+  pdsch:
+    # min_ue_mcs: 0                           # Optional UINT (0). Sets a minimum PDSCH MCS value to be used for all UEs. Supported: [0 - 28].
+    # max_ue_mcs: 28                          # Optional UINT (28). Sets a maximum PDSCH MCS value to be used for all UEs. Supported: [0 - 28].
+    # fixed_rar_mcs: 0                        # Optional UINT (0). Sets a fixed RAR MCS value for all UEs. Supported: [0 - 28].
+    # fixed_sib1_mcs: 5                       # Optional UINT (5). Sets a fixed SIB1 MCS for all UEs. Supported: [0 - 28].
+    # nof_harqs: 16                           # Optional UNIT (16). Sets the number of Downlink HARQ processes. Supported [2, 4, 6, 8, 10, 12, 16].
+    # max_nof_harq_retxs: 4                   # Optional UINT (4). Sets the maximum number times a DL HARQ can be retransmitted before it is discarded. Supported: [0 - 4].
+    # max_consecutive_kos: 100                # Optional UINT (100). Sets the maximum number of consecutive HARQ-ACK KOs before an RLF is reported. Supported: [0 - inf].
+    # rv_sequence: [0,2,3,1]                  # Optional UINT (0,2,3,1). Sets the redundancy version sequence to use for PDSCH. Supported: any combination of [0, 1, 2, 3].
+    mcs_table: qam256                        # Optional TEXT (qam64). Sets the MCS table to use for PDSCH. Supported: [qam64, qam256].
+    # min_rb_size: 1                          # Optional UINT (1). Sets the minimum RB size for the UE PDSCH resource allocation. Supported: [1 - 275].
+    # max_rb_size: 275                        # Optional UINT (275). Sets the maximum RB size for the UE PDSCH resource allocation. Supported: [1 - 275].
+    # start_rb: 0                             # Optional UINT (0). Sets the start RB for resource allocation of UE PDSCHs. Supported [0 - 275].
+    # end_rb: 275                             # Optional UINT (275). Sets the end RB for resource allocation of UE PDSCHs. Supported [0 - 275].
+    # max_pdschs_per_slot: 35                 # Optional UINT (35). Sets the maximum number of PDSCH grants per slot, including SIB, RAR, Paging and UE data grants. Supported: [1 - 35].
+    # max_alloc_attempts: 35                  # Optional UINT (35). Sets the maximum number of DL or UL PDCCH grant allocation attempts per slot before scheduler skips the slot. Supported: [1 - 35].
+    olla_cqi_inc_step: 0 #0.001                # Optional FLOAT (0.001). Sets the outer-loop link adaptation (OLLA) increment value. The value 0 means that OLLA is disabled. Supported: [0 - 1].
+    olla_target_bler: 0.10                  # Optional FLOAT (0.01). Sets the target UL BLER set in Outer-loop link adaptation (OLLA) algorithm. sUPPORTED: [0 - 0.5].
+    olla_max_cqi_offset: 10                  # Optional FLOAT (5). Sets the maximum offset that the Outer-loop link adaptation (OLLA) can apply to estimate the UL SNR. Supported: positive float.
+    # ref_path_loss: 70                       # Optional FLOAT (70). Sets the reference path-loss for target PUSCH SINR in dB. Supported: [50 - 120].
+    harq_la_cqi_drop_threshold: 3           # Optional UINT (3). Sets the link Adaptation (LA) threshold for drop in CQI of the first HARQ transmission above which HARQ retransmissions are cancelled. Set this value to 0 to disable this feature. Supported: [0 - 15].
+    harq_la_ri_drop_threshold: 1            # Optional UINT (1). Sets the link Adaptation (LA) threshold for drop in nof. layers of the first HARQ transmission above which HARQ retransmission is cancelled. Set this value to 0 to disable this feature. Supported: [0 - 4].
+    
+log:
+  # none, error, warning, info, debug
+  filename: /tmp/gnb.log
+ # tracing_filename: /tmp/tracing.log
+  all_level: info
+  all_level: warning                    # Optional TEXT (warning). Sets a common log level across PHY, MAC, RLC, PDCP, RRC, SDAP, NGAP and GTPU layers.
+  lib_level: warning                    # Optional TEXT (warning). Sets the generic log level.
+  e2ap_level: warning                   # Optional TEXT (warning). Sets the E2AP log level.
+  config_level: info                    # Optional TEXT (none). Sets the config log level.
+  rrc_level: debug                    # Optional TEXT (warning). Sets the RRC log level.
+  ngap_level: info                   # Optional TEXT (warning). Sets NGAP log level.
+  sec_level: warning                    # Optional TEXT (warning). Sets the security functions level.
+  pdcp_level: warning                   # Optional TEXT (warning). Sets the PDCP log level.
+  sdap_level: warning                   # Optional TEXT (warning). Sets the SDAP log level.
+  # e1ap_level: warning                   # Optional TEXT (warning). Sets the E1AP log level.
+  # e1ap_json_enabled: false              # Optional BOOLEAN (false). Enables the JSON logging of E1AP PDUs. Supported: [false, true].
+  cu_level: warning                     # Optional TEXT (warning). Sets the CU log level.
+  mac_level: debug                    # Optional TEXT (warning). Sets the MAC log level.
+  rlc_level: warning                    # Optional TEXT (warning). Sets the RLC log level.
+  f1ap_level: info                   # Optional TEXT (warning). Sets the F1AP log level.
+  f1u_level: warning                    # Optional TEXT (warning). Sets the F1u log level.
+  gtpu_level: warning                   # Optional TEXT (warning). Sets the GTPU log level.
+  du_level: warning                     # Optional TEXT (warning). Sets the DU log level.
+  f1ap_json_enabled: false              # Optional BOOLEAN (false). Enables the JSON logging of F1AP PDUs. Supported: [false, true].
+  # high_latency_diagnostics_enabled: false # Optional BOOLEAN (false). Enables logging of performance diagnostics when high computational latencies are detected. Supported: [false, true].
+  fapi_level: warning                   # Optional TEXT (warning). Sets FAPI log level.
+  hal_level: warning                    # Optional TEXT (warning). Sets the HAL log level.
+  broadcast_enabled: false              # Optional BOOLEAN (false). Enables logging in the PHY and MAC layer of broadcast messages and all PRACH opportunities. Supported: [false, true].
+  # phy_rx_symbols_filename:              # Optional TEXT. Print received symbols to file. Symbols will be printed if a valid path is set. Format: file path. This file can be used in the srsRAN_matlab project.
+  # phy_rx_symbols_port: 0                # Optional TEXT. Set to a valid receive port number to dump the IQ symbols from that port only, or set to "all" to dump the IQ symbols from all UL receive ports. Only works if "phy_rx_symbols_filename" is set. Supported: [NON-NEGATIVE or all].
+  # phy_rx_symbols_prach: false           # Optional BOOLEAN (false). Set to true to dump the IQ symbols from all the PRACH ports. Only works if "phy_rx_symbols_filename" is set. Supported: [false, true].
+  # hex_max_size: 0                       # Optional UINT (0). Sets maximum number of bytes to print for hex messages. Supported: [0 - 1024]
+  ofh_level: warning                    # Optional TEXT (warning). Sets Open Fronthaul log level.
+  radio_level: info                     # Optional TEXT (info). Sets radio log level.
+  phy_level: warning                    # Optional TEXT (warning). Sets PHY log level.
+
+pcap:
+  mac_enable: false
+  mac_filename: /tmp/gnb_mac.pcap
+  ngap_enable: false
+  ngap_filename: /tmp/gnb_ngap.pcap
+  f1ap_filename: /tmp/gnb_f1ap.pcap     # Optional TEXT (/tmp/gnb_f1ap.pcap). Path for F1AP PCAPs.
+  f1ap_enable: false                    # Optional BOOLEAN (false). Enable/disable F1AP packet capture. Supported: [false, true].
+
+metrics:
+  autostart_stdout_metrics: true       # Optional BOOLEAN (false). Sets whether or note to autostart stdout metrics reporting. Supported [false, true].
+  enable_json: true
+  # enable_log: true  
+  # enable_verbose: true       # Enable reporting metrics in JSON format
+  addr: 127.0.0.1         # Metrics-server IP (host machine)
+  port: 55555             # Metrics-server Port
+  layers:
+      enable_app_usage: true      # Enable application usage metrics
+      enable_e1ap: true           # Enable E1AP metrics
+      enable_pdcp: true           # Enable PDCP metrics
+      enable_cu_up_executor: true # Enable CU-UP executor metrics
+      enable_sched: true          # Enable DU scheduler metrics
+      enable_rlc: true            # Enable RLC metrics
+      enable_mac: true            # Enable MAC metrics
+      enable_executor: true       # Enable DU-high executor metrics
+      enable_du_low: true         # Enable DU low metrics (upper physical layer)
+      enable_ru: true             # Enable Radio Unit metrics

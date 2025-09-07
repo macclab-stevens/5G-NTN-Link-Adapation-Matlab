@@ -7,3 +7,24 @@ A Matlab script to develop link adaptation algorithms for Non-Terrestrial Networ
 The data set can be found hosted on Harvard Dataverse. And can be saved in the /Data/ folder for consistency.
 
 https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/BXBOTB
+
+
+# scripts for reference:
+
+tail -f /tmp/gnb.log | awk '{if ($0~/sinr\"/)print$2/2-23; }
+
+# configuraiton notes:
+```yml
+ru_sdr:
+  device_driver: uhd
+  device_args: type=b200,serial=315AF4C,num_recv_frames=64,num_send_frames=64
+  srate: 23.04
+  otw_format: sc12
+  tx_gain: 62 #80
+  rx_gain: 3 #64
+```
+produces
+```
+DL SINR : 5-5.5
+PUSCH   : 5.5
+```
