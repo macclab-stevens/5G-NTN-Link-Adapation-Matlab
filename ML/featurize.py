@@ -28,51 +28,128 @@ def canonical_name(name: str) -> str:
 
 
 def build_rename_map(cols: List[str]) -> Dict[str, str]:
-    return {c: canonical_name(c) for c in cols}
+    """Build a robust rename map to canonical names.
+
+    Additionally, map common SINR column names to `snr` when `snr` is absent
+    (e.g., logs that expose `dl_sinr`/`ul_sinr`).
+    """
+    base = {c: canonical_name(c) for c in cols}
+
+    # If there is no explicit `snr` column, promote a SINR column to `snr`.
+    values = set(base.values())
+    if "snr" not in values:
+        # Prefer downlink SINR, then generic SINR, then uplink SINR
+        prefer = ["dl_sinr", "sinr", "ul_sinr"]
+        for orig, canon in list(base.items()):
+            if canon in prefer:
+                base[orig] = "snr"
+                break
+
+    return base
 
 
 def engineer_features(lf: pl.LazyFrame) -> pl.LazyFrame:
-    # Assumes columns have been canonicalized already
-    return (
-        lf.with_columns(
+    """Engineer features robustly with optional columns.
+
+    Assumes columns have been canonicalized already. Safely handles datasets that
+    provide SINR but not SNR, or ACK fields instead of BLKErr, etc.
+    """
+    cols = set(lf.columns)
+
+    clean_exprs: List[pl.Expr] = []
+
+    # Helper to add cast/clean only if column exists
+    def add_clean(col: str, dtype) -> None:
+        if col in cols:
+            clean_exprs.append(
+                pl.col(col)
+                .cast(pl.Utf8, strict=False)
+                .str.strip_chars()
+                .str.strip_chars("'")
+                .cast(dtype, strict=False)
+            )
+
+    # Numeric/string cleaning for known columns when present
+    for name, dtype in (
+        ("snr", pl.Float64),
+        ("pathloss", pl.Float64),
+        ("cqi", pl.Int32),
+        ("mcs", pl.Int32),
+        ("tbs", pl.Float64),
+        ("tcr", pl.Float64),
+        ("bler", pl.Float64),
+        ("target_bler", pl.Float64),
+        ("slot", pl.Int64),
+        ("slot_percent", pl.Float64),
+        ("ele_angle", pl.Float64),
+        ("window", pl.Float64),
+        ("blkerr", pl.Int8),
+    ):
+        add_clean(name, dtype)
+
+    # Map textual ACK/NACK/DTX to blkerr ∈ {0,1} if `blkerr` not present
+    if "blkerr" not in cols:
+        if "ack_result" in cols:
+            clean_exprs.append(
+                pl.when(pl.col("ack_result").cast(pl.Utf8).str.to_uppercase() == pl.lit("ACK"))
+                .then(pl.lit(1))
+                .otherwise(pl.lit(0))
+                .cast(pl.Int8)
+                .alias("blkerr")
+            )
+        elif "ack_status" in cols:
+            # Heuristic: treat status == 1 as ACK, else 0
+            clean_exprs.append(
+                (pl.col("ack_status").cast(pl.Int8, strict=False) == 1)
+                .cast(pl.Int8)
+                .alias("blkerr")
+            )
+
+    # Provide a default target_bler if missing (10% expressed as 10.0)
+    if "target_bler" not in cols:
+        clean_exprs.append(pl.lit(10.0).alias("target_bler"))
+
+    # Keep `mod` as string if present
+    if "mod" in cols:
+        clean_exprs.append(pl.col("mod").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").alias("mod"))
+
+    lf = lf.with_columns(clean_exprs) if clean_exprs else lf
+
+    # Derived features (only add when inputs exist)
+    derived_exprs: List[pl.Expr] = []
+
+    if "snr" in lf.columns:
+        derived_exprs.extend(
             [
-                # Clean strings: strip whitespace and quotes, then cast
-                pl.col("snr").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").cast(pl.Float64, strict=False),
-                pl.col("pathloss").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").cast(pl.Float64, strict=False),
-                pl.col("cqi").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").cast(pl.Int32, strict=False),
-                pl.col("mcs").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").cast(pl.Int32, strict=False),
-                pl.col("tbs").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").cast(pl.Float64, strict=False),
-                pl.col("tcr").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").cast(pl.Float64, strict=False),
-                pl.col("bler").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").cast(pl.Float64, strict=False),
-                pl.col("target_bler").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").cast(pl.Float64, strict=False),
-                pl.col("slot").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").cast(pl.Int64, strict=False),
-                pl.col("slot_percent").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").cast(pl.Float64, strict=False),
-                pl.col("ele_angle").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").cast(pl.Float64, strict=False),
-                pl.col("window").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").cast(pl.Float64, strict=False),
-                pl.col("blkerr").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").cast(pl.Int8, strict=False),
-                pl.col("mod").cast(pl.Utf8, strict=False).str.strip_chars().str.strip_chars("'").alias("mod"),
-            ]
-        )
-        .with_columns(
-            [
-                # Derived features
                 pl.col("snr").round(0).alias("snr_round"),
                 ((pl.col("snr") * 2).floor() / 2).alias("snr_bin05"),
                 pl.col("snr").clip(-20, 50).alias("snr_clip"),
-                pl.col("pathloss").round(0).alias("pathloss_round"),
-                pl.col("mod").cast(pl.Categorical).to_physical().alias("mod_code"),
-                (pl.col("snr") * pl.col("cqi").cast(pl.Float64)).alias("snr_cqi"),
-                (pl.col("snr") * pl.col("pathloss")).alias("snr_pathloss"),
-                # Label: pass when BLER <= Target and BLKErr == 1 (ACK)
-                (
-                    (pl.col("bler") <= pl.col("target_bler"))
-                    & (pl.col("blkerr") == 1)
-                )
-                .cast(pl.Int8)
-                .alias("label_pass"),
             ]
         )
-    )
+
+    if "pathloss" in lf.columns:
+        derived_exprs.append(pl.col("pathloss").round(0).alias("pathloss_round"))
+
+    if "mod" in lf.columns:
+        derived_exprs.append(pl.col("mod").cast(pl.Categorical).to_physical().alias("mod_code"))
+
+    if "snr" in lf.columns and "cqi" in lf.columns:
+        derived_exprs.append((pl.col("snr") * pl.col("cqi").cast(pl.Float64)).alias("snr_cqi"))
+
+    if "snr" in lf.columns and "pathloss" in lf.columns:
+        derived_exprs.append((pl.col("snr") * pl.col("pathloss")).alias("snr_pathloss"))
+
+    # Label: pass when BLER <= Target and BLKErr == 1 (ACK)
+    if all(c in lf.columns for c in ("bler", "target_bler", "blkerr")):
+        derived_exprs.append(
+            (
+                (pl.col("bler") <= pl.col("target_bler")) & (pl.col("blkerr") == 1)
+            )
+            .cast(pl.Int8)
+            .alias("label_pass")
+        )
+
+    return lf.with_columns(derived_exprs) if derived_exprs else lf
 
 
 def finalize_columns(cols: List[str]) -> List[str]:
@@ -102,11 +179,69 @@ def finalize_columns(cols: List[str]) -> List[str]:
     return final
 
 
-def _align_select(df: pl.DataFrame, schema_cols: List[str]) -> pl.DataFrame:
-    # Add missing columns as nulls and reorder to schema
-    cols_to_add = [c for c in schema_cols if c not in df.columns]
-    if cols_to_add:
-        df = df.with_columns([pl.lit(None).alias(c) for c in cols_to_add])
+def _arrow_to_polars_dtype(t: pa.DataType):
+    import pyarrow as pa  # local for clarity
+
+    if pa.types.is_float64(t):
+        return pl.Float64
+    if pa.types.is_float32(t):
+        return pl.Float32
+    if pa.types.is_int64(t):
+        return pl.Int64
+    if pa.types.is_int32(t):
+        return pl.Int32
+    if pa.types.is_int16(t):
+        return pl.Int16
+    if pa.types.is_int8(t):
+        return pl.Int8
+    if pa.types.is_uint64(t):
+        return pl.UInt64
+    if pa.types.is_uint32(t):
+        return pl.UInt32
+    if pa.types.is_uint16(t):
+        return pl.UInt16
+    if pa.types.is_uint8(t):
+        return pl.UInt8
+    if pa.types.is_boolean(t):
+        return pl.Boolean
+    # Fallback to Utf8
+    return pl.Utf8
+
+
+def _align_select(df: pl.DataFrame, schema_cols: List[str], schema_arrow: pa.Schema) -> pl.DataFrame:
+    """Ensure df has all schema columns with correct dtypes and order.
+
+    - Adds missing columns as nulls cast to expected dtype
+    - Casts existing columns to expected dtype when they differ (incl. Null)
+    - Reorders columns to match writer schema order
+    """
+    # Add missing columns with correct dtype
+    missing_exprs: List[pl.Expr] = []
+    for field in schema_arrow:
+        name = field.name
+        if name not in df.columns:
+            pdt = _arrow_to_polars_dtype(field.type)
+            missing_exprs.append(pl.lit(None).cast(pdt).alias(name))
+    if missing_exprs:
+        df = df.with_columns(missing_exprs)
+
+    # Cast columns to expected dtype when necessary
+    cast_exprs: List[pl.Expr] = []
+    for field in schema_arrow:
+        name = field.name
+        if name in df.columns:
+            expected = _arrow_to_polars_dtype(field.type)
+            # Polars Null/other mismatches should be cast
+            try:
+                cur = df.schema[name]
+            except Exception:
+                cur = None
+            if cur != expected:
+                cast_exprs.append(pl.col(name).cast(expected, strict=False))
+    if cast_exprs:
+        df = df.with_columns(cast_exprs)
+
+    # Select and order
     return df.select(schema_cols)
 
 
@@ -116,6 +251,7 @@ def process_file_split(
     writer_test: pq.ParquetWriter,
     chunksize: int,
     schema_cols: List[str],
+    schema_arrow: pa.Schema,
     rng: "np.random.Generator",
     test_frac: float,
     start_offset: int = 0,
@@ -138,7 +274,7 @@ def process_file_split(
         # Select final columns and align to schema
         used_columns = finalize_columns(df.columns)
         df = df.select([c for c in used_columns if c in schema_cols])
-        df = _align_select(df, schema_cols)
+        df = _align_select(df, schema_cols, schema_arrow)
 
         # Random split mask
         mask = rng.random(df.height) < test_frac
@@ -197,12 +333,13 @@ def main() -> None:
                 df0 = df0.select(finalize_columns(df0.columns))
                 tbl0 = df0.to_arrow()
                 schema_cols = df0.columns
+                schema_arrow = tbl0.schema
                 if train_path:
-                    writer_train = pq.ParquetWriter(train_path, tbl0.schema, compression="snappy")
+                    writer_train = pq.ParquetWriter(train_path, schema_arrow, compression="snappy")
                 if test_path:
-                    writer_test = pq.ParquetWriter(test_path, tbl0.schema, compression="snappy")
+                    writer_test = pq.ParquetWriter(test_path, schema_arrow, compression="snappy")
                 if combined_path:
-                    writer_combined = pq.ParquetWriter(combined_path, tbl0.schema, compression="snappy")
+                    writer_combined = pq.ParquetWriter(combined_path, schema_arrow, compression="snappy")
 
                 # Write the peeked rows split across train/test (+ combined)
                 written_rows = 0
@@ -222,6 +359,7 @@ def main() -> None:
                     writer_test,
                     args.chunksize,
                     schema_cols,
+                    schema_arrow,
                     rng,
                     args.test_frac,
                     start_offset=written_rows,
@@ -234,6 +372,7 @@ def main() -> None:
                     writer_test,
                     args.chunksize,
                     schema_cols or [],
+                    schema_arrow,  # type: ignore[arg-type]
                     rng,
                     args.test_frac,
                     writer_combined=writer_combined,

@@ -2,3 +2,4 @@
 *.gz
 *.log
 *.parquet
+/ML/data/
