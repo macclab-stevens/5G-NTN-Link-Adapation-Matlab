@@ -349,6 +349,33 @@ class MCSRecommender:
 
 ## Performance
 
+### Probability Metrics & Calibration
+
+Run end-to-end probability quality checks from the ML directory:
+
+```bash
+# Overall metrics + calibration
+uv run python compute_metrics.py --sample 200000
+
+# Add per-slice breakdowns (example: by CQI)
+uv run python compute_metrics.py --slice-by cqi --max-slices 6 --min-slice-count 5000 --sample 200000
+```
+
+Artifacts written to `reports/`:
+- `metrics_prob.json` with summary metrics
+- `calibration_overall.csv/.png` reliability diagram
+- `metrics_by_<slice>.csv`, `calibration_by_<slice>.png` when slicing
+
+Example results on the provided test sample (200k rows):
+- MAE: 0.0075
+- MSE (Brier): 0.00374  → RMSE: 0.061
+- ECE (Expected Calibration Error): 0.00078
+
+Interpretation:
+- Brier/MAE reflect absolute probability error. Here the average absolute error is ~0.75%, with RMSE ~6.1%. Lower is better.
+- The reliability curve (`reports/calibration_overall.png`) tracks the diagonal closely and ECE is very small, indicating good calibration of predicted probabilities overall.
+- Use per-slice outputs (e.g., `calibration_by_cqi.png`) to confirm calibration across operating regimes; small slices can appear noisier.
+
 ### Model Metrics (Test Set)
 - **Accuracy**: 99.0%
 - **Log Loss**: 0.027
@@ -394,4 +421,4 @@ Throughput figures for recommended strategies are simulated from model probabili
 3. **Strategy Trade-offs**: Clear reliability vs throughput trade-off as expected
 4. **GPU Acceleration**: 1000x+ speedup for large-scale evaluations
 
-For detailed methodology and mathematical foundations, see [`docs/MCS_Methodology.md`](MCS_Methodology.md).
+For detailed methodology and mathematical foundations, see [`ML/docs/MCS_Methodology.md`](MCS_Methodology.md).

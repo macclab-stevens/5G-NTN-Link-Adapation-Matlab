@@ -67,6 +67,22 @@ Outputs are written under `ML/reports/` (CSV + PNG).
     uv run python ML/evaluate_xgb.py --test features/test.parquet --output-dir ML/reports --tradeoff --slice-by cqi --grid-steps 49
     ```
 
+### Calibration with Confidence Bands
+- File: `ML/compute_metrics.py`
+- Purpose: Core probability metrics and reliability diagrams; can overlay 95% CI bands for empirical pass rate per bin.
+- Example:
+  ```bash
+  uv run python ML/compute_metrics.py \
+    --test features/test.parquet \
+    --model ML/models/xgb_mcs_pass.json \
+    --meta ML/models/model_meta.json \
+    --output-dir ML/reports \
+    --sample 200000 \
+    --calibration-bins 15 \
+    --calibration-ci
+  ```
+  Outputs: `metrics_prob.json`, `calibration_overall.csv/.png` (with CI), and optional `metrics_by_<slice>.csv` / `calibration_by_<slice>.png` when using `--slice-by`.
+
 ### eval_violation_curves.py
 - File: `ML/eval_violation_curves.py`
 - Purpose: ROC/PR curves for “violation” detection with score = 1 − P(pass).
@@ -155,4 +171,3 @@ Outputs are written under `ML/reports/` (CSV + PNG).
 - Evaluation: `ML/evaluate_xgb.py`, `ML/eval_violation_curves.py`
 - Plotting: `ML/plot_threshold_sweep.py`, `ML/plot_throughput_pareto.py`, `ML/plot_bler_vs_elevation.py`
 - Data prep: `ML/featurize.py`
-

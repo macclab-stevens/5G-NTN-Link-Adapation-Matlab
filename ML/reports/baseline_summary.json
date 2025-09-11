@@ -1,30 +1,30 @@
 {
   "model_threshold": {
     "accept_rate": 1.0,
-    "violation": 0.029493749141693115,
-    "throughput_expected": 5.841789245605469,
-    "throughput_realized": 5.841789245605469,
-    "avg_mcs": 26.864
+    "violation": 0.1248655915260315,
+    "throughput_expected": 5.046618938446045,
+    "throughput_realized": 5.069234371185303,
+    "avg_mcs": 24.28
   },
   "model_throughput": {
     "accept_rate": 1.0,
-    "violation": 0.030926942825317383,
-    "throughput_expected": 5.844721794128418,
-    "throughput_realized": 5.844721794128418,
+    "violation": 0.1535291075706482,
+    "throughput_expected": 5.1052775382995605,
+    "throughput_realized": 5.129578113555908,
     "avg_mcs": 27.0
   },
   "baseline_cqi": {
     "accept_rate": 1.0,
-    "violation": 0.9999725818634033,
-    "throughput_expected": 1.7723155906423926e-05,
-    "throughput_realized": 1.7723155906423926e-05,
-    "avg_mcs": 0.539975
+    "violation": 0.1366363763809204,
+    "throughput_expected": 5.04490327835083,
+    "throughput_realized": 5.064789295196533,
+    "avg_mcs": 24.688
   },
   "baseline_cqi_olla": {
     "accept_rate": 1.0,
-    "violation": 0.9999979138374329,
-    "throughput_expected": 4.896326117886929e-07,
-    "throughput_realized": 4.896326117886929e-07,
-    "avg_mcs": 0.0
+    "violation": 0.9986316561698914,
+    "throughput_expected": 0.0013488682452589273,
+    "throughput_realized": 0.0003701171954162419,
+    "avg_mcs": 0.0755
   }
 }
