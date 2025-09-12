@@ -271,6 +271,36 @@ calibrated_threshold = find_optimal_threshold(predictions, targets, target_viola
 
 This ensures predictable reliability guarantees in production.
 
+### Threshold τ: What It Is and How It Affects Decisions
+
+The threshold τ is the minimum predicted pass probability required to accept an MCS under the threshold policy. Concretely, for each context x and candidate MCS m, the model outputs p = P(pass | x, m). The threshold policy selects the highest m whose predicted probability p is at least τ. If no candidate meets τ, the policy falls back to a conservative choice (e.g., the argmax of P(pass) or the minimum MCS).
+
+- What τ represents
+  - A control knob for reliability: higher τ demands higher predicted success probability before transmitting with a given MCS.
+  - τ is not itself a violation rate; it is a probability cutoff. After calibration, a chosen τ is expected to achieve a target violation rate among accepted transmissions on held‑out data.
+
+- How τ is set
+  - During training you may pass `--calibrate-target <v>` to sweep τ and pick the one that best meets the desired violation rate v (e.g., 0.1 for 10%). The chosen τ is written to `models/model_meta.json` and used by `MCSRecommender`.
+  - You can override τ at runtime in APIs that accept it (e.g., `recommend_mcs_tput_constrained(..., tau=...)`).
+
+- Effects of changing τ
+  - Increase τ (e.g., 0.65 → 0.75):
+    - Reliability up (lower violation among accepted)
+    - Acceptance rate down (fewer contexts meet the cutoff)
+    - Throughput can decrease due to fewer transmissions and/or more conservative MCS choices
+  - Decrease τ (e.g., 0.65 → 0.55):
+    - Acceptance rate up and potentially higher throughput
+    - Reliability down (higher violation among accepted)
+
+- How to choose τ
+  - Use `evaluate_xgb.py --tradeoff` (or `evaluate_all.py`) to inspect acceptance, violation, and throughput across τ. Pick the point that meets your reliability target while preserving sufficient throughput.
+  - Validate by slice (e.g., `--slice-by snr_round` or `cqi`) to ensure worst regions also meet the target.
+
+- Visual aids
+  - `reports/tradeoff_overall_violation.png` and `tradeoff_overall_throughput.png`: show how violation and throughput change with τ.
+  - `reports/threshold_sweep.png`: acceptance and throughput panels vs τ.
+  - `reports/tradeoff_violation_by_<slice>.png`: per‑slice reliability curves vs τ.
+
 ## MCS Optimization Strategies
 
 ### 1. Threshold-Based Optimization

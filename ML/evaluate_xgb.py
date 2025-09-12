@@ -31,8 +31,8 @@ def main() -> None:
     ap.add_argument("--topk", type=int, default=20, help="Top K features for importance plot")
     # Tradeoff analysis
     ap.add_argument("--tradeoff", action="store_true", help="Compute throughput vs violation tradeoffs across thresholds")
-    ap.add_argument("--slice-by", type=str, default="cqi", help="Slice column (e.g., 'cqi' or 'snr_round') for per-slice tradeoffs")
-    ap.add_argument("--min-slice-count", type=int, default=1000, help="Minimum rows per slice to include in plots")
+    ap.add_argument("--slice-by", type=str, default="snr_round", help="Slice column (e.g., 'snr_round' or 'cqi') for per-slice tradeoffs")
+    ap.add_argument("--min-slice-count", type=int, default=3000, help="Minimum rows per slice to include in plots")
     ap.add_argument("--max-slices", type=int, default=8, help="Max number of slices to plot (most frequent)")
     ap.add_argument("--grid-steps", type=int, default=99, help="Number of thresholds from 0.99..0.01 to evaluate")
     args = ap.parse_args()
@@ -42,11 +42,18 @@ def main() -> None:
 
     feats = load_features_list(Path(args.meta))
 
-    # Load test data
-    lf = pl.scan_parquet(args.test).select([c for c in feats + ["label_pass", "tbs"] if c in pl.scan_parquet(args.test).columns])
+    # Load test data (include requested slice column if present). Avoid double scan by using schema.
+    schema_names = pl.scan_parquet(args.test).collect_schema().names()
+    sel = [c for c in feats + ["label_pass", "tbs"] if c in schema_names]
+    if args.slice_by and args.slice_by in schema_names and args.slice_by not in sel:
+        sel.append(args.slice_by)
+    lf = pl.scan_parquet(args.test).select(sel)
     if args.sample and args.sample > 0:
         lf = lf.head(args.sample)
-    df = lf.collect(streaming=True)
+    df = lf.collect()
+    # Derive common slice columns if requested but absent
+    if args.slice_by == "snr_round" and "snr_round" not in df.columns and "snr" in df.columns:
+        df = df.with_columns(pl.col("snr").round(0).alias("snr_round"))
     if df.height == 0:
         print("No test rows loaded.")
         return

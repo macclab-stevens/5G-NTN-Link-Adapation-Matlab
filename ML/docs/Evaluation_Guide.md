@@ -18,7 +18,13 @@ uv run python ML/featurize.py --data-dir ML/data --include-glob "**/*.csv"
 # 2) Train model
 uv run python ML/train_xgb.py --train features/train.parquet --test features/test.parquet --output-dir ML/models --calibrate-target 0.1
 
-# 3) Evaluate model, write predictions + metrics
+# 3a) One-shot orchestrated evaluation (recommended)
+uv run python ML/evaluate_all.py \
+  --model ML/models/xgb_mcs_pass.json --meta ML/models/model_meta.json \
+  --test features/test.parquet --output-dir ML/reports \
+  --slice-by snr_round --sample 100000 --shap-sample 20000 --grid-steps 99
+
+# 3b) (Alternative) Evaluate model, write predictions + metrics
 uv run python ML/evaluate_xgb.py --model ML/models/xgb_mcs_pass.json --meta ML/models/model_meta.json --test features/test.parquet --output-dir ML/reports --tradeoff
 
 # 4) Optional plots and additional analyses
@@ -33,6 +39,34 @@ Outputs are written under `ML/reports/` (CSV + PNG).
 ---
 
 ## Script Reference
+
+### evaluate_all.py (Orchestrator)
+- File: `ML/evaluate_all.py`
+- Purpose: Run the full evaluation pipeline and produce a concise summary.
+- What it runs:
+  1) `evaluate_xgb.py` (predictions, metrics, feature importance, SHAP, tradeoffs)
+  2) `compute_metrics.py` (Brier/MAE/RMSE/ECE + calibration plots; per-slice metrics and plots)
+  3) `plot_threshold_sweep.py` and `plot_throughput_pareto.py`
+- Outputs:
+  - `summary.json` and `summary.txt` with key metrics and at-threshold stats (and worst-slice violation)
+  - All artifacts from the scripts above under `--output-dir` (`reports/`)
+- Parameters:
+  - `--model`, `--meta`, `--test`, `--output-dir` (same as others)
+  - `--slice-by` (default `snr_round`) to drive per-slice outputs
+  - `--sample`, `--shap-sample`, `--grid-steps`, `--device`
+- Example:
+  ```bash
+  uv run python ML/evaluate_all.py \
+    --model ML/models/xgb_mcs_pass.json --meta ML/models/model_meta.json \
+    --test features/test.parquet --output-dir ML/reports \
+    --slice-by snr_round --sample 100000 --shap-sample 20000 --grid-steps 99
+  ```
+  This produces, among others:
+  - `metrics.json`, `metrics_prob.json`
+  - `calibration_overall.png`, `calibration_by_<slice>.png`
+  - `metrics_by_<slice>.csv` and `metrics_by_<slice>.png` (error vs slice)
+  - `tradeoff_overall_*.png`, `tradeoff_by_<slice>.csv/png`
+  - `threshold_sweep.png/.csv`, `throughput_pareto.png/.csv`
 
 ### evaluate_xgb.py
 - File: `ML/evaluate_xgb.py`
@@ -53,7 +87,7 @@ Outputs are written under `ML/reports/` (CSV + PNG).
   - `--shap-sample`: rows for SHAP pred_contribs (default 10k)
   - `--topk`: top features to plot by gain (default 20)
   - `--tradeoff`: add acceptance/violation/throughput sweep vs threshold τ
-  - `--slice-by`: column to slice tradeoffs (e.g., `cqi`, `snr_round`)
+  - `--slice-by`: column to slice tradeoffs (default `snr_round`; e.g., `snr_round`, `cqi`)
   - `--min-slice-count`: minimum rows per slice to include (default 1000)
   - `--max-slices`: maximum slices to plot (default 8)
   - `--grid-steps`: number of τ values (0.99→0.01) to evaluate
@@ -69,7 +103,7 @@ Outputs are written under `ML/reports/` (CSV + PNG).
 
 ### Calibration with Confidence Bands
 - File: `ML/compute_metrics.py`
-- Purpose: Core probability metrics and reliability diagrams; can overlay 95% CI bands for empirical pass rate per bin.
+- Purpose: Core probability metrics and reliability diagrams; can overlay 95% CI bands for empirical pass rate per bin. Defaults: `--slice-by snr_round`, `--calibration-bins 10`, `--min-slice-count 3000`.
 - Example:
   ```bash
   uv run python ML/compute_metrics.py \
@@ -81,7 +115,7 @@ Outputs are written under `ML/reports/` (CSV + PNG).
     --calibration-bins 15 \
     --calibration-ci
   ```
-  Outputs: `metrics_prob.json`, `calibration_overall.csv/.png` (with CI), and optional `metrics_by_<slice>.csv` / `calibration_by_<slice>.png` when using `--slice-by`.
+  Outputs: `metrics_prob.json`, `calibration_overall.csv/.png` (with CI), and optional `metrics_by_<slice>.csv` / `metrics_by_<slice>.png` / `calibration_by_<slice>.png` when using `--slice-by`.
 
 ### eval_violation_curves.py
 - File: `ML/eval_violation_curves.py`
@@ -168,6 +202,7 @@ Outputs are written under `ML/reports/` (CSV + PNG).
 
 ## File Map
 - Training: `ML/train_xgb.py`
-- Evaluation: `ML/evaluate_xgb.py`, `ML/eval_violation_curves.py`
+- Orchestrator: `ML/evaluate_all.py`
+- Evaluation: `ML/evaluate_xgb.py`, `ML/eval_violation_curves.py`, `ML/compute_metrics.py`
 - Plotting: `ML/plot_threshold_sweep.py`, `ML/plot_throughput_pareto.py`, `ML/plot_bler_vs_elevation.py`
 - Data prep: `ML/featurize.py`

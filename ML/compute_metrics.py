@@ -134,10 +134,10 @@ def main() -> None:
     ap.add_argument("--sample", type=int, default=200_000, help="Max rows from test set (0 = all)")
     ap.add_argument("--export-csv", action="store_true", help="Write per-row predictions to CSV")
     # Slicing & calibration
-    ap.add_argument("--slice-by", type=str, default="cqi", help="Column to slice metrics by (e.g., 'cqi' or 'snr_round')")
-    ap.add_argument("--max-slices", type=int, default=8, help="Max slices to include in per-slice plots")
-    ap.add_argument("--min-slice-count", type=int, default=1000, help="Minimum rows per slice to include")
-    ap.add_argument("--calibration-bins", type=int, default=15, help="Number of bins for calibration diagrams")
+    ap.add_argument("--slice-by", type=str, default="snr_round", help="Column to slice metrics by (e.g., 'snr_round' or 'cqi')")
+    ap.add_argument("--max-slices", type=int, default=12, help="Max slices to include in per-slice plots")
+    ap.add_argument("--min-slice-count", type=int, default=3000, help="Minimum rows per slice to include")
+    ap.add_argument("--calibration-bins", type=int, default=10, help="Number of bins for calibration diagrams")
     ap.add_argument("--calibration-ci", action="store_true", help="Overlay 95% CI band for empirical pass rate in calibration plots")
     args = ap.parse_args()
 
@@ -160,7 +160,7 @@ def main() -> None:
             sel.append(slice_col)
     if args.sample and args.sample > 0:
         lf = lf.head(args.sample)
-    df = lf.select(sel).collect(streaming=True)
+    df = lf.select(sel).collect()
     if df.height == 0:
         raise SystemExit("No rows available from test data")
 
@@ -200,7 +200,8 @@ def main() -> None:
             cal_df, _ = _calibration(y[mask], y_pred[mask], n_bins=max(8, args.calibration_bins // 2))
             plt.plot(cal_df["pred_mean"].to_numpy(), cal_df["true_rate"].to_numpy(), marker="o", linewidth=1.2, label=f"{slice_col}={val}")
         if records:
-            pl.DataFrame(records).write_csv(out_dir / f"metrics_by_{slice_col}.csv")
+            mdf = pl.DataFrame(records)
+            mdf.write_csv(out_dir / f"metrics_by_{slice_col}.csv")
             plt.xlabel("Predicted probability")
             plt.ylabel("Empirical pass rate")
             plt.title(f"Calibration by {slice_col}")
@@ -209,6 +210,52 @@ def main() -> None:
             plt.tight_layout()
             plt.savefig(out_dir / f"calibration_by_{slice_col}.png", dpi=150)
             plt.close()
+
+            # Also plot error metrics vs slice (e.g., SNR bins)
+            try:
+                order = top[slice_col].to_list()
+                # Normalize slice ordering (numeric ascending if possible)
+                numeric = all(isinstance(v, (int, float, np.integer, np.floating)) for v in order)
+                if numeric:
+                    order = sorted(order)
+                # Build series in the chosen order
+                mae_vals = []
+                rmse_vals = []
+                mse_vals = []
+                xs = []
+                for v in order:
+                    sub = mdf.filter(pl.col(slice_col) == (float(v) if numeric else v))
+                    if sub.height == 0:
+                        continue
+                    xs.append(v)
+                    mae_vals.append(float(sub["mae"][0]))
+                    rmse_vals.append(float(sub["rmse"][0]))
+                    mse_vals.append(float(sub["mse"][0]))
+                if xs:
+                    plt.figure(figsize=(7.2, 4.2))
+                    # X-axis: numeric or categorical labels
+                    if numeric:
+                        xcoords = np.array(xs, dtype=float)
+                        plt.plot(xcoords, mae_vals, marker='o', label='MAE')
+                        plt.plot(xcoords, rmse_vals, marker='o', label='RMSE')
+                        plt.plot(xcoords, mse_vals, marker='o', label='MSE (Brier)')
+                        plt.xlabel(slice_col)
+                    else:
+                        xcoords = np.arange(len(xs))
+                        plt.plot(xcoords, mae_vals, marker='o', label='MAE')
+                        plt.plot(xcoords, rmse_vals, marker='o', label='RMSE')
+                        plt.plot(xcoords, mse_vals, marker='o', label='MSE (Brier)')
+                        plt.xticks(xcoords, [str(x) for x in xs], rotation=30, ha='right')
+                        plt.xlabel(slice_col)
+                    plt.ylabel('Error')
+                    plt.title(f"Probability errors by {slice_col}")
+                    plt.grid(True, alpha=0.3)
+                    plt.legend()
+                    plt.tight_layout()
+                    plt.savefig(out_dir / f"metrics_by_{slice_col}.png", dpi=150)
+                    plt.close()
+            except Exception as e:
+                print(f"Failed to plot metrics_by_{slice_col}: {e}")
 
     if args.export_csv:
         pl.DataFrame({"pred_prob": y_pred, "label_pass": y.astype(np.int32)}).write_csv(out_dir / "prob_predictions.csv")

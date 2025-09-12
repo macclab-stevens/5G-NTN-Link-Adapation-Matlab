@@ -83,7 +83,7 @@ def main() -> None:
         lf = lf.filter(pl.all_horizontal([pl.col(c).is_not_null() for c in feats + ["label_pass"]]))
         if args.max_rows and args.max_rows > 0:
             lf = lf.head(args.max_rows)
-        df = lf.collect(streaming=True)
+        df = lf.collect()
         if df.height == 0:
             print("No data available after filtering")
             return
@@ -103,8 +103,8 @@ def main() -> None:
         if args.max_rows and args.max_rows > 0:
             lf_tr = lf_tr.head(args.max_rows)
             lf_te = lf_te.head(max(args.max_rows // 4, 1))
-        df_tr = lf_tr.collect(streaming=True)
-        df_te = lf_te.collect(streaming=True)
+        df_tr = lf_tr.collect()
+        df_te = lf_te.collect()
         if df_tr.height == 0 or df_te.height == 0:
             print("Empty train or test after filtering")
             return
