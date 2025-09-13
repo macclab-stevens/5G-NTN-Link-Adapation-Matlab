@@ -1,7 +1,7 @@
 {
   "predictive": {
-    "logloss": 0.013602178543806076,
-    "accuracy": 0.99586
+    "logloss": 0.015090899541974068,
+    "accuracy": 0.99558
   },
   "probability": {
     "rows": 200000,
@@ -31,10 +31,10 @@
   },
   "at_threshold": {
     "threshold": 0.6499999761581421,
-    "accept_rate": 0.00267,
-    "violation": 0.07116104868913857,
-    "obs_throughput": 6150.591796875,
-    "exp_throughput": 6142.18994140625
+    "accept_rate": 0.00195,
+    "violation": 0.07948717948717948,
+    "obs_throughput": 6979.3642578125,
+    "exp_throughput": 7035.64111328125
   },
   "worst_slice_at_threshold": {
     "slice": -2.0,

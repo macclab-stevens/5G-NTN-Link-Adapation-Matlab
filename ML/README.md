@@ -79,6 +79,35 @@ uv run python recommend_mcs.py --input your_data.csv --objective throughput --ou
 uv run python evaluate_xgb.py --test features/test.parquet --output-dir reports
 ```
 
+### Dataset Download (Harvard Dataverse)
+
+Use the helper script in `ML/data/` to fetch files from Harvard Dataverse using `pooch`.
+
+```bash
+# Install deps if needed
+pip install pooch requests
+
+# Download a specific file from the dataset by DOI + filename
+python ML/data/download_dataverse.py \
+  --dataset-doi "doi:10.7910/DVN/BXBOTB" \
+  --filename "Case9_MCS_ThroughputCalulation_BLERw50Tbler0.01_240601_124717.csv"
+
+# Or download by direct URL (replace FILE_ID)
+python ML/data/download_dataverse.py \
+  --url "https://dataverse.harvard.edu/api/access/datafile/FILE_ID?format=original"
+
+# Optional flags
+#   --dest ML/data/              # where to save (defaults to ML/data/)
+#   --progress                   # show progress bar
+#   --hash md5:<hex>             # integrity check (or sha256:<hex>)
+#   --overwrite                  # force re-download if file exists
+
+# Download ALL files from the dataset (sequential download, optional extraction)
+python ML/data/download_dataverse.py \
+  --dataset-doi "doi:10.7910/DVN/BXBOTB" \
+  --all --extract --extract-to ML/data/ --progress
+```
+
 ### Data Requirements
 
 Your CSV files should contain these columns:
@@ -95,6 +124,22 @@ Your CSV files should contain these columns:
 - `BLKErr` → block error indicator
 
 ## Usage Guide
+
+### SNR×CQI LUT (Lookup Table)
+
+- **Export (threshold objective, dense CQI grid):** Generates a 2D SNR×CQI→MCS table using the model and test data. Uses the model’s calibrated threshold when `--threshold -1` and fills all CQIs 0..15 per SNR bin by nearest‑neighbor.
+  - `uv run python export_lut.py --data features/test.parquet --out data/snr_cqi_lut_dense.csv --objective threshold --threshold -1 --snr-bin 0.1 --cqi-bin 1 --min-count 100 --fill-cqi-grid --cqi-min 0 --cqi-max 15`
+- **Export (throughput objective):** Picks argmax E[p(pass)]×SE(mcs) per bin. Often needs a guardrail later to avoid over‑aggressive MCS at low SNR.
+  - `uv run python export_lut.py --data features/test.parquet --out data/snr_cqi_lut.csv --objective throughput --snr-bin 0.1 --cqi-bin 1 --min-count 500`
+- **Evaluate LUT vs model:** Scores the LUT policies using the trained model as an oracle; writes summary and plots under `reports/`.
+  - `uv run python compare_baselines.py --data features/test.parquet --output-dir reports --snr-cqi-lut data/snr_cqi_lut_dense.csv --lut-snr-bin 0.1 --lut-cqi-bin 1.0`
+- **Optional reliability guardrail (at evaluation):** Enforce minimum pass probability when applying the LUT.
+  - `--baseline-guardrail 0.9`
+- **SNR‑only LUT (optional):** If you prefer SNR→MCS tables, use `--snr-lut` and `--snr-lut-bin` in `compare_baselines.py`.
+
+Notes:
+- Ensure `features/test.parquet` contains `snr` and `cqi` (see featurization). For broader CQI coverage, include logs with CQI variation (e.g., Case9 files) when running `featurize.py`.
+- Dense grid fill mirrors the nearest CQI’s choice within each SNR bin for missing CQIs; pair with the threshold objective to avoid selecting MCS 27 everywhere at low SNR.
 
 ### 1. End-to-End Pipeline
 

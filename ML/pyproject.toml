@@ -8,7 +8,9 @@ dependencies = [
     "matplotlib>=3.10.6",
     "numpy>=2.2.6",
     "polars>=1.33.1",
+    "pooch>=1.8.2",
     "pyarrow>=21.0.0",
+    "requests>=2.32.5",
     "tqdm>=4.67.1",
     "xgboost>=3.0.5",
 ]

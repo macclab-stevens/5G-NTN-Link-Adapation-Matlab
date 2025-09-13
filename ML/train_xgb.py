@@ -76,11 +76,17 @@ def main() -> None:
     # Determine input mode (combined vs separate)
     if args.data:
         lf = pl.scan_parquet(args.data)
-        cols = lf.columns
+        cols = lf.collect_schema().names()
         feats = get_feature_list(cols)
         needed = feats + ["label_pass", "tbs"]
         lf = lf.select([c for c in needed if c in cols])
-        lf = lf.filter(pl.all_horizontal([pl.col(c).is_not_null() for c in feats + ["label_pass"]]))
+        present_for_filter = [c for c in feats + ["label_pass"] if c in cols]
+        lf = lf.filter(pl.all_horizontal([pl.col(c).is_not_null() for c in present_for_filter]))
+        # Validate required columns
+        if "mcs" not in cols:
+            raise SystemExit("Training requires 'mcs' in features. Re-run featurize.py on raw logs that include MCS, or provide a combined Parquet with an 'mcs' column.")
+        if "label_pass" not in cols:
+            raise SystemExit("Training requires 'label_pass'. Ensure your raw data has BLER and ACK/BLKErr so featurize can derive label_pass.")
         if args.max_rows and args.max_rows > 0:
             lf = lf.head(args.max_rows)
         df = lf.collect()
@@ -95,11 +101,21 @@ def main() -> None:
     else:
         lf_tr = pl.scan_parquet(args.train)
         lf_te = pl.scan_parquet(args.test)
-        cols = lf_tr.columns
+        cols = lf_tr.collect_schema().names()
         feats = get_feature_list(cols)
         needed = feats + ["label_pass", "tbs"]
-        lf_tr = lf_tr.select([c for c in needed if c in cols]).filter(pl.all_horizontal([pl.col(c).is_not_null() for c in feats + ["label_pass"]]))
-        lf_te = lf_te.select([c for c in needed if c in lf_te.columns]).filter(pl.all_horizontal([pl.col(c).is_not_null() for c in feats + ["label_pass"]]))
+        lf_tr = lf_tr.select([c for c in needed if c in cols])
+        present_for_filter_tr = [c for c in feats + ["label_pass"] if c in cols]
+        lf_tr = lf_tr.filter(pl.all_horizontal([pl.col(c).is_not_null() for c in present_for_filter_tr]))
+        cols_te = lf_te.collect_schema().names()
+        lf_te = lf_te.select([c for c in needed if c in cols_te])
+        present_for_filter_te = [c for c in feats + ["label_pass"] if c in cols_te]
+        lf_te = lf_te.filter(pl.all_horizontal([pl.col(c).is_not_null() for c in present_for_filter_te]))
+        # Validate required columns
+        if "mcs" not in cols:
+            raise SystemExit("Training requires 'mcs' in train features. Re-run featurize.py on raw logs that include MCS.")
+        if "label_pass" not in cols:
+            raise SystemExit("Training requires 'label_pass' in train features. Ensure featurize derived it from BLER and ACK/BLKErr.")
         if args.max_rows and args.max_rows > 0:
             lf_tr = lf_tr.head(args.max_rows)
             lf_te = lf_te.head(max(args.max_rows // 4, 1))

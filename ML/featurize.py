@@ -23,6 +23,35 @@ def canonical_name(name: str) -> str:
         "eleange": "ele_angle",
         "targetbler": "target_bler",
         "blkerr": "blkerr",
+        # Common variants -> canonical
+        "slot_index": "slot",
+        "nslot": "slot",
+        "slotidx": "slot",
+        "elevation": "ele_angle",
+        "elevation_angle": "ele_angle",
+        "elevation_deg": "ele_angle",
+        "elev": "ele_angle",
+        "path_loss": "pathloss",
+        "dl_cqi": "cqi",
+        "cqi_dl": "cqi",
+        "mcs_index": "mcs",
+        "mcs_idx": "mcs",
+        "mcsidx": "mcs",
+        "transport_block_size": "tbs",
+        "transportblocksize": "tbs",
+        "tb_size": "tbs",
+        "tbs_bytes": "tbs",
+        "window_len": "window",
+        "filter_window": "window",
+        "win": "window",
+        "ackresult": "ack_result",
+        "ackstatus": "ack_status",
+        "ack_nack": "ack_result",
+        "harq_ack": "ack_status",
+        "ack": "ack_status",
+        "block_error_rate": "bler",
+        "blerrate": "bler",
+        "bler_percent": "bler",
     }
     return fixes.get(n, n)
 
@@ -39,11 +68,41 @@ def build_rename_map(cols: List[str]) -> Dict[str, str]:
     values = set(base.values())
     if "snr" not in values:
         # Prefer downlink SINR, then generic SINR, then uplink SINR
-        prefer = ["dl_sinr", "sinr", "ul_sinr"]
+        prefer = ["dl_sinr", "dl_sinr_db", "sinr", "sinr_db", "ul_sinr", "ul_sinr_db"]
         for orig, canon in list(base.items()):
             if canon in prefer:
                 base[orig] = "snr"
                 break
+
+    # Normalize common alias canonical names to our targets
+    alias_map = {
+        "mcs_index": "mcs",
+        "mcs_idx": "mcs",
+        "mcsidx": "mcs",
+        "path_loss": "pathloss",
+        "elevation": "ele_angle",
+        "elevation_angle": "ele_angle",
+        "elevation_deg": "ele_angle",
+        "cqi_dl": "cqi",
+        "dl_cqi": "cqi",
+        "transport_block_size": "tbs",
+        "transportblocksize": "tbs",
+        "tb_size": "tbs",
+        "tbs_bytes": "tbs",
+        "window_len": "window",
+        "filter_window": "window",
+        "win": "window",
+        "ack": "ack_status",
+        "ack_nack": "ack_result",
+        "ackresult": "ack_result",
+        "ackstatus": "ack_status",
+        "block_error_rate": "bler",
+        "blerrate": "bler",
+        "bler_percent": "bler",
+    }
+    for orig, canon in list(base.items()):
+        if canon in alias_map:
+            base[orig] = alias_map[canon]
 
     return base
 
@@ -87,7 +146,7 @@ def engineer_features(lf: pl.LazyFrame) -> pl.LazyFrame:
     ):
         add_clean(name, dtype)
 
-    # Map textual ACK/NACK/DTX to blkerr ∈ {0,1} if `blkerr` not present
+    # Map ACK/NACK variants to blkerr ∈ {0,1} if `blkerr` not present
     if "blkerr" not in cols:
         if "ack_result" in cols:
             clean_exprs.append(
@@ -102,6 +161,16 @@ def engineer_features(lf: pl.LazyFrame) -> pl.LazyFrame:
             clean_exprs.append(
                 (pl.col("ack_status").cast(pl.Int8, strict=False) == 1)
                 .cast(pl.Int8)
+                .alias("blkerr")
+            )
+        elif "ack" in cols:
+            # Generic ack column; try numeric 1/0 first, else parse text
+            clean_exprs.append(
+                pl.when(pl.col("ack").cast(pl.Int8, strict=False).is_not_null())
+                .then((pl.col("ack").cast(pl.Int8, strict=False) == 1).cast(pl.Int8))
+                .otherwise(
+                    (pl.col("ack").cast(pl.Utf8, strict=False).str.to_uppercase() == pl.lit("ACK")).cast(pl.Int8)
+                )
                 .alias("blkerr")
             )
 
@@ -245,6 +314,47 @@ def _align_select(df: pl.DataFrame, schema_cols: List[str], schema_arrow: pa.Sch
     return df.select(schema_cols)
 
 
+def _detect_separator(path: Path) -> str:
+    """Robustly detect delimiter by sniffing the header.
+
+    Many .tab files in the wild are actually comma-separated. We inspect the
+    first chunk to choose between tab, comma, or semicolon. Fallback to comma.
+    """
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as f:
+            head = f.read(65536)
+    except Exception:
+        # Fall back to extension heuristic if read fails
+        ext = path.suffix.lower()
+        return "\t" if ext in {".tsv", ".tab"} else ","
+    # Count common delimiters
+    cnt_tab = head.count("\t")
+    cnt_comma = head.count(",")
+    cnt_semicolon = head.count(";")
+    # Prefer the delimiter with the highest count
+    if max(cnt_tab, cnt_comma, cnt_semicolon) == 0:
+        # No obvious delimiter; default by extension
+        ext = path.suffix.lower()
+        return "\t" if ext in {".tsv", ".tab"} else ","
+    if cnt_tab >= cnt_comma and cnt_tab >= cnt_semicolon and cnt_tab > 0:
+        return "\t"
+    if cnt_comma >= cnt_semicolon and cnt_comma > 0:
+        return ","
+    if cnt_semicolon > 0:
+        return ";"
+    return ","
+
+
+def _read_header(path: Path) -> pl.DataFrame:
+    sep = _detect_separator(path)
+    return pl.read_csv(path, n_rows=0, separator=sep)
+
+
+def _scan_file(path: Path) -> pl.LazyFrame:
+    sep = _detect_separator(path)
+    return pl.scan_csv(path, separator=sep)
+
+
 def process_file_split(
     csv_path: Path,
     writer_train: pq.ParquetWriter,
@@ -257,13 +367,13 @@ def process_file_split(
     start_offset: int = 0,
     writer_combined: Optional[pq.ParquetWriter] = None,
 ) -> None:
-    header_df = pl.read_csv(csv_path, n_rows=0)
+    header_df = _read_header(csv_path)
     rename_map = build_rename_map(header_df.columns)
 
     offset = int(start_offset)
     total = 0
     while True:
-        lf = pl.scan_csv(csv_path).slice(offset, chunksize).rename(rename_map)
+        lf = _scan_file(csv_path).slice(offset, chunksize).rename(rename_map)
         lf = engineer_features(lf)
         df = lf.collect()
         if df.height == 0:
@@ -295,7 +405,12 @@ def main() -> None:
     ap.add_argument("--test-frac", type=float, default=0.2, help="Test split fraction")
     ap.add_argument("--seed", type=int, default=42, help="Random seed for splitting")
     ap.add_argument("--chunksize", type=int, default=200_000, help="Chunk rows to stream per write")
-    ap.add_argument("--include-glob", type=str, default="*.csv", help="Glob pattern to include files (default: *.csv)")
+    ap.add_argument(
+        "--include-glob",
+        type=str,
+        default="*",
+        help="Glob pattern to include files (CSV/TAB; default: *). Only .csv/.tab/.tsv are processed.",
+    )
     ap.add_argument("--max-files", type=int, default=0, help="Optional cap on number of files to process (0 = all)")
     args = ap.parse_args()
 
@@ -310,11 +425,12 @@ def main() -> None:
     if test_path:
         ensure_dir(test_path.parent)
 
-    csvs = sorted([p for p in data_dir.glob(args.include_glob) if p.is_file()])
+    allowed_exts = {".csv", ".tsv", ".tab", ".CSV", ".TSV", ".TAB"}
+    csvs = sorted([p for p in data_dir.glob(args.include_glob) if p.is_file() and p.suffix in allowed_exts])
     if args.max_files and args.max_files > 0:
         csvs = csvs[: args.max_files]
     if not csvs:
-        print(f"No CSV files found in {data_dir}")
+        print(f"No CSV/TAB files found in {data_dir} matching '{args.include_glob}'")
         return
 
     # Initialize writer lazily after first chunk to get schema
@@ -324,11 +440,15 @@ def main() -> None:
     schema_cols: Optional[List[str]] = None
     rng = __import__("numpy").random.default_rng(args.seed)
     try:
-        for p in tqdm(csvs, desc="Featurizing CSVs"):
+        for p in tqdm(csvs, desc="Featurizing CSV/TAB"):
             # For the first file/chunk, create writers with that schema
             if writer_train is None or writer_test is None:
                 # Peek a small slice to get engineered schema
-                lf0 = engineer_features(pl.scan_csv(p).slice(0, min(10_000, args.chunksize)).rename(build_rename_map(pl.read_csv(p, n_rows=0).columns)))
+                lf0 = engineer_features(
+                    _scan_file(p)
+                    .slice(0, min(10_000, args.chunksize))
+                    .rename(build_rename_map(_read_header(p).columns))
+                )
                 df0 = lf0.collect()
                 df0 = df0.select(finalize_columns(df0.columns))
                 tbl0 = df0.to_arrow()

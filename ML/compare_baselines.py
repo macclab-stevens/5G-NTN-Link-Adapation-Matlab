@@ -71,6 +71,178 @@ def _map_cqi_array(cqi_vals: np.ndarray, args) -> np.ndarray:
         return np.clip(mapped, args.baseline_min_mcs, args.baseline_max_mcs).astype(np.int32)
     return np.clip(np.rint(m), args.baseline_min_mcs, args.baseline_max_mcs).astype(np.int32)
 
+
+# --- SNR→MCS lookup table support ---
+class SNRLookup:
+    def __init__(self, lut: dict[int, int], bin_size: float, default_mcs: int = 0):
+        self.lut = dict(lut)
+        self.bin = float(bin_size)
+        self.default = int(default_mcs)
+        self.keys = np.array(sorted(self.lut.keys()), dtype=np.int64)
+
+    def map_array(self, snr_vals: np.ndarray) -> np.ndarray:
+        if self.bin <= 0:
+            raise ValueError("snr_lut_bin must be > 0")
+        # Quantize SNR to integer bin codes, e.g., 0.1 → code = round(snr*10)
+        codes = np.rint(snr_vals / self.bin).astype(np.int64)
+        out = np.full(codes.shape, self.default, dtype=np.int32)
+        if self.keys.size == 0:
+            return out
+        # Exact hits
+        mask_exact = np.isin(codes, self.keys)
+        if mask_exact.any():
+            # Build fast dict access via vectorized take
+            # Map codes to indices in self.keys
+            pos = np.searchsorted(self.keys, codes[mask_exact])
+            # Correct positions that are not exact matches
+            exact_codes = codes[mask_exact]
+            in_range = (pos < self.keys.size) & (self.keys[pos] == exact_codes)
+            # For exact in-range, assign
+            if in_range.any():
+                out_idx = np.nonzero(mask_exact)[0][in_range]
+                key_idx = pos[in_range]
+                out[out_idx] = np.array([self.lut[int(k)] for k in self.keys[key_idx]], dtype=np.int32)
+        # Fallback: nearest key
+        mask_miss = ~mask_exact
+        if mask_miss.any():
+            c = codes[mask_miss]
+            pos = np.searchsorted(self.keys, c)
+            pos_clamped = np.clip(pos, 0, self.keys.size - 1)
+            left = np.maximum(pos_clamped - 1, 0)
+            right = pos_clamped
+            # Choose nearer of left/right
+            dist_left = np.abs(c - self.keys[left])
+            dist_right = np.abs(self.keys[right] - c)
+            choose_right = dist_right < dist_left
+            nearest_idx = np.where(choose_right, right, left)
+            out_idx = np.nonzero(mask_miss)[0]
+            out[out_idx] = np.array([self.lut[int(k)] for k in self.keys[nearest_idx]], dtype=np.int32)
+        return out
+
+
+def load_snr_lut(path: Optional[str], bin_size: float, default_mcs: int) -> Optional[SNRLookup]:
+    if path is None:
+        return None
+    p = Path(path)
+    if not p.exists():
+        raise SystemExit(f"SNR LUT file not found: {p}")
+    try:
+        df = pl.read_csv(p)
+    except Exception as e:
+        raise SystemExit(f"Failed to read SNR LUT CSV: {e}")
+    # Accept columns: 'snr' or 'snr_bin' and 'mcs'
+    cols = [c.lower() for c in df.columns]
+    norm = {c.lower(): c for c in df.columns}
+    if 'mcs' not in cols:
+        raise SystemExit("SNR LUT CSV must have a 'mcs' column")
+    snr_col = 'snr' if 'snr' in cols else ('snr_bin' if 'snr_bin' in cols else None)
+    if snr_col is None:
+        raise SystemExit("SNR LUT CSV must have 'snr' or 'snr_bin' column")
+    snr_vals = df[norm[snr_col]].to_numpy()
+    mcs_vals = df[norm['mcs']].to_numpy()
+    # Build mapping: quantized code -> mcs
+    codes = np.rint(snr_vals.astype(np.float64) / float(bin_size)).astype(np.int64)
+    lut: dict[int, int] = {}
+    for code, m in zip(codes, mcs_vals):
+        try:
+            lut[int(code)] = int(m)
+        except Exception:
+            continue
+    return SNRLookup(lut, bin_size=bin_size, default_mcs=default_mcs)
+
+
+# --- 2D SNR×CQI → MCS lookup table support ---
+class SNR_CQI_Lookup:
+    def __init__(self, lut: dict[tuple[int, int], int], snr_bin: float, cqi_bin: float, default_mcs: int = 0):
+        self.lut = dict(lut)
+        self.snr_bin = float(snr_bin)
+        self.cqi_bin = float(cqi_bin)
+        self.default = int(default_mcs)
+        # Precompute sorted unique snr codes and within-snr cqi codes and mcs arrays
+        snr_codes = sorted({k[0] for k in self.lut.keys()})
+        self.snr_keys = np.array(snr_codes, dtype=np.int64)
+        self.cqi_keys_by_snr: dict[int, np.ndarray] = {}
+        self.mcs_by_snr: dict[int, np.ndarray] = {}
+        from collections import defaultdict
+        buckets: dict[int, list[tuple[int, int]]] = defaultdict(list)
+        for (s, c), m in self.lut.items():
+            buckets[s].append((c, m))
+        for s, pairs in buckets.items():
+            pairs.sort(key=lambda x: x[0])
+            self.cqi_keys_by_snr[int(s)] = np.array([c for c, _ in pairs], dtype=np.int64)
+            self.mcs_by_snr[int(s)] = np.array([m for _, m in pairs], dtype=np.int32)
+
+    def _nearest_snr(self, codes: np.ndarray) -> np.ndarray:
+        # Choose nearest snr key in 1D
+        pos = np.searchsorted(self.snr_keys, codes)
+        pos = np.clip(pos, 0, self.snr_keys.size - 1)
+        left = np.maximum(pos - 1, 0)
+        right = pos
+        dist_left = np.abs(codes - self.snr_keys[left])
+        dist_right = np.abs(self.snr_keys[right] - codes)
+        choose_right = dist_right < dist_left
+        return np.where(choose_right, self.snr_keys[right], self.snr_keys[left])
+
+    def map_arrays(self, snr_vals: np.ndarray, cqi_vals: np.ndarray) -> np.ndarray:
+        if self.snr_bin <= 0 or self.cqi_bin <= 0:
+            raise ValueError("snr_bin and cqi_bin must be > 0")
+        snr_codes = np.rint(snr_vals / self.snr_bin).astype(np.int64)
+        cqi_codes = np.rint(cqi_vals / self.cqi_bin).astype(np.int64)
+        out = np.full(snr_codes.shape, self.default, dtype=np.int32)
+        if self.snr_keys.size == 0:
+            return out
+        # Nearest snr key per row
+        snr_near = self._nearest_snr(snr_codes)
+        # Process rows grouped by chosen snr key
+        uniq_snr = np.unique(snr_near)
+        for s in uniq_snr:
+            mask = snr_near == s
+            cqi_keys = self.cqi_keys_by_snr.get(int(s))
+            mcs_arr = self.mcs_by_snr.get(int(s))
+            if cqi_keys is None or mcs_arr is None or cqi_keys.size == 0:
+                continue
+            c = cqi_codes[mask]
+            pos = np.searchsorted(cqi_keys, c)
+            pos = np.clip(pos, 0, cqi_keys.size - 1)
+            left = np.maximum(pos - 1, 0)
+            right = pos
+            dist_left = np.abs(c - cqi_keys[left])
+            dist_right = np.abs(cqi_keys[right] - c)
+            choose_right = dist_right < dist_left
+            idx = np.where(choose_right, right, left)
+            out_idx = np.nonzero(mask)[0]
+            out[out_idx] = mcs_arr[idx]
+        return out
+
+
+def load_snr_cqi_lut(path: Optional[str], snr_bin: float, cqi_bin: float, default_mcs: int) -> Optional[SNR_CQI_Lookup]:
+    if path is None:
+        return None
+    p = Path(path)
+    if not p.exists():
+        raise SystemExit(f"SNR×CQI LUT file not found: {p}")
+    try:
+        df = pl.read_csv(p)
+    except Exception as e:
+        raise SystemExit(f"Failed to read SNR×CQI LUT CSV: {e}")
+    cols = {c.lower(): c for c in df.columns}
+    need = ["snr", "cqi", "mcs"]
+    for n in need:
+        if n not in cols:
+            raise SystemExit("SNR×CQI LUT CSV must have columns: snr,cqi,mcs")
+    snr_vals = df[cols["snr"]].to_numpy()
+    cqi_vals = df[cols["cqi"]].to_numpy()
+    mcs_vals = df[cols["mcs"]].to_numpy()
+    snr_codes = np.rint(snr_vals.astype(np.float64) / float(snr_bin)).astype(np.int64)
+    cqi_codes = np.rint(cqi_vals.astype(np.float64) / float(cqi_bin)).astype(np.int64)
+    lut: dict[tuple[int, int], int] = {}
+    for s, c, m in zip(snr_codes, cqi_codes, mcs_vals):
+        try:
+            lut[(int(s), int(c))] = int(m)
+        except Exception:
+            continue
+    return SNR_CQI_Lookup(lut, snr_bin=float(snr_bin), cqi_bin=float(cqi_bin), default_mcs=int(default_mcs))
+
 def batch_predict_all_mcs(df: pl.DataFrame, rec: MCSRecommender) -> Tuple[np.ndarray, np.ndarray]:
     """Predict P(pass) for all rows and all 0..27 MCS in a single batch.
 
@@ -186,6 +358,45 @@ def simulate_policies(
     p_cqi = preds[np.arange(n), m_cqi]
     s_cqi = p_cqi * eff[m_cqi]
 
+    # Baseline SNR→MCS LUT policy (optional)
+    p_snr = None
+    s_snr = None
+    m_snr = None
+    if args.snr_lut is not None:
+        snr_vals = df["snr"].to_numpy().astype(np.float32, copy=False) if "snr" in df.columns else np.zeros(n, dtype=np.float32)
+        lut = load_snr_lut(args.snr_lut, args.snr_lut_bin, args.snr_lut_default_mcs)
+        if lut is None:
+            raise SystemExit("Failed to load SNR LUT")
+        m_snr = np.clip(lut.map_array(snr_vals), args.baseline_min_mcs, args.baseline_max_mcs).astype(np.int32)
+        if args.baseline_guardrail >= 0.0:
+            tau_b = float(args.baseline_guardrail)
+            m_idx2 = np.arange(28, dtype=np.int32)[None, :]
+            mask2 = preds >= tau_b
+            best_feas2 = np.where(mask2, m_idx2, -1).max(axis=1)
+            m_snr = np.where(best_feas2 >= 0, best_feas2, m_snr).astype(np.int32)
+        p_snr = preds[np.arange(n), m_snr]
+        s_snr = p_snr * eff[m_snr]
+
+    # Baseline SNR×CQI→MCS LUT policy (optional)
+    p_sc = None
+    s_sc = None
+    m_sc = None
+    if args.snr_cqi_lut is not None:
+        snr_vals = df["snr"].to_numpy().astype(np.float32, copy=False) if "snr" in df.columns else np.zeros(n, dtype=np.float32)
+        cqi_vals = df["cqi"].to_numpy().astype(np.float32, copy=False) if "cqi" in df.columns else np.zeros(n, dtype=np.float32)
+        lut2d = load_snr_cqi_lut(args.snr_cqi_lut, args.lut_snr_bin, args.lut_cqi_bin, args.lut_default_mcs)
+        if lut2d is None:
+            raise SystemExit("Failed to load SNR×CQI LUT")
+        m_sc = np.clip(lut2d.map_arrays(snr_vals, cqi_vals), args.baseline_min_mcs, args.baseline_max_mcs).astype(np.int32)
+        if args.baseline_guardrail >= 0.0:
+            tau_b = float(args.baseline_guardrail)
+            m_idx3 = np.arange(28, dtype=np.int32)[None, :]
+            mask3 = preds >= tau_b
+            best_feas3 = np.where(mask3, m_idx3, -1).max(axis=1)
+            m_sc = np.where(best_feas3 >= 0, best_feas3, m_sc).astype(np.int32)
+        p_sc = preds[np.arange(n), m_sc]
+        s_sc = p_sc * eff[m_sc]
+
     # OLLA policy (sequential offset)
     delta = float(args.olla_init)
     up = step * target_bler
@@ -210,12 +421,17 @@ def simulate_policies(
             "avg_mcs": float(m.mean()),
         }
 
-    return {
+    out = {
         "model_threshold": summarize(p_best, s_best, best),
         "model_throughput": summarize(p_tp, s_tp, tp_best),
         "baseline_cqi": summarize(p_cqi, s_cqi, m_cqi),
         "baseline_cqi_olla": summarize(p_olla, s_olla, m_olla),
     }
+    if p_snr is not None and s_snr is not None and m_snr is not None:
+        out["baseline_snr_table"] = summarize(p_snr, s_snr, m_snr)
+    if p_sc is not None and s_sc is not None and m_sc is not None:
+        out["baseline_snr_cqi_table"] = summarize(p_sc, s_sc, m_sc)
+    return out
 
 
 def upd(store: Dict[str, float], m: int, p: float, s: float, rng: np.random.Generator, sample: bool, ret_success: bool=False):
@@ -269,6 +485,31 @@ def elevation_series(
         m_cqi = np.where(bfeas >= 0, bfeas, m_cqi).astype(np.int32)
     p_cqi = preds[np.arange(n), m_cqi]
 
+    # Baseline SNR LUT (optional)
+    have_snr_lut = args.snr_lut is not None
+    if have_snr_lut:
+        lut = load_snr_lut(args.snr_lut, args.snr_lut_bin, args.snr_lut_default_mcs)
+        m_snr = np.clip(lut.map_array(df["snr"].to_numpy().astype(np.float32, copy=False)), args.baseline_min_mcs, args.baseline_max_mcs).astype(np.int32)
+        if args.baseline_guardrail >= 0.0:
+            tau_b = float(args.baseline_guardrail)
+            bfeas2 = np.where(preds >= tau_b, m_idx, -1).max(axis=1)
+            m_snr = np.where(bfeas2 >= 0, bfeas2, m_snr).astype(np.int32)
+        p_snr = preds[np.arange(n), m_snr]
+
+    # Baseline SNR×CQI LUT (optional)
+    have_snr_cqi_lut = args.snr_cqi_lut is not None
+    if have_snr_cqi_lut:
+        lut2d = load_snr_cqi_lut(args.snr_cqi_lut, args.lut_snr_bin, args.lut_cqi_bin, args.lut_default_mcs)
+        m_sc = np.clip(lut2d.map_arrays(
+            df["snr"].to_numpy().astype(np.float32, copy=False),
+            df["cqi"].to_numpy().astype(np.float32, copy=False) if "cqi" in df.columns else np.zeros(n, dtype=np.float32)),
+            args.baseline_min_mcs, args.baseline_max_mcs).astype(np.int32)
+        if args.baseline_guardrail >= 0.0:
+            tau_b = float(args.baseline_guardrail)
+            bfeas3 = np.where(preds >= tau_b, m_idx, -1).max(axis=1)
+            m_sc = np.where(bfeas3 >= 0, bfeas3, m_sc).astype(np.int32)
+        p_sc = preds[np.arange(n), m_sc]
+
     delta = float(args.olla_init)
     up = step * target_bler
     down = step * (1.0 - target_bler)
@@ -289,18 +530,24 @@ def elevation_series(
         "p_model_tp": p_tp,  "m_model_tp": best_tp.astype(np.float32),
         "p_cqi": p_cqi,      "m_cqi": m_cqi.astype(np.float32),
         "p_olla": p_olla,    "m_olla": m_olla.astype(np.float32),
+        **({"p_snr": p_snr, "m_snr": m_snr.astype(np.float32)} if have_snr_lut else {}),
+        **({"p_snr_cqi": p_sc, "m_snr_cqi": m_sc.astype(np.float32)} if have_snr_cqi_lut else {}),
     }).with_columns(((pl.col("ele") / bin_width).floor() * bin_width).alias("ele_bin"))
     def agg(prefix: str) -> List[pl.Expr]:
         return [
             (1 - pl.col(f"p_{prefix}")).mean().alias(f"bler_{prefix}"),
             pl.col(f"m_{prefix}").mean().alias(f"mcs_{prefix}"),
         ]
-    gb = plot_df.group_by("ele_bin").agg(
-        agg("model_tau") + agg("model_tp") + agg("cqi") + agg("olla")
-    ).sort("ele_bin")
+    aggs = agg("model_tau") + agg("model_tp") + agg("cqi") + agg("olla")
+    if have_snr_lut:
+        aggs += agg("snr")
+    if have_snr_cqi_lut:
+        aggs += agg("snr_cqi")
+    gb = plot_df.group_by("ele_bin").agg(aggs).sort("ele_bin")
     elev = gb["ele_bin"].to_numpy()
-    bler = {k: gb[f"bler_{k}"].to_numpy() for k in ["model_tau","model_tp","cqi","olla"]}
-    mcs  = {k: gb[f"mcs_{k}"].to_numpy() for k in ["model_tau","model_tp","cqi","olla"]}
+    keys = ["model_tau","model_tp","cqi","olla"] + (["snr"] if have_snr_lut else []) + (["snr_cqi"] if have_snr_cqi_lut else [])
+    bler = {k: gb[f"bler_{k}"].to_numpy() for k in keys}
+    mcs  = {k: gb[f"mcs_{k}"].to_numpy() for k in keys}
     return elev, bler, mcs
 
 
@@ -323,6 +570,15 @@ def main() -> None:
     ap.add_argument("--baseline-max-mcs", type=int, default=27, help="Maximum MCS for baselines")
     ap.add_argument("--baseline-guardrail", type=float, default=-1.0, help="Optional min P(pass) for baselines; if >=0, degrade MCS until met")
     ap.add_argument("--olla-init", type=float, default=0.0, help="Initial OLLA offset (CQI units)")
+    # SNR LUT baseline
+    ap.add_argument("--snr-lut", type=str, default=None, help="CSV file with SNR→MCS table (columns: snr,mcs). snr is rounded to --snr-lut-bin.")
+    ap.add_argument("--snr-lut-bin", type=float, default=0.1, help="SNR bin size for lookup table rounding (e.g., 0.1 for x.x)")
+    ap.add_argument("--snr-lut-default-mcs", type=int, default=0, help="Default MCS if an SNR key is missing (nearest key used otherwise)")
+    # 2D LUT baseline (SNR×CQI)
+    ap.add_argument("--snr-cqi-lut", type=str, default=None, help="CSV file with SNR×CQI→MCS table (columns: snr,cqi,mcs). snr,cqi rounded to bins.")
+    ap.add_argument("--lut-snr-bin", type=float, default=0.1, help="SNR bin size for 2D LUT rounding")
+    ap.add_argument("--lut-cqi-bin", type=float, default=1.0, help="CQI bin size for 2D LUT rounding")
+    ap.add_argument("--lut-default-mcs", type=int, default=0, help="Default MCS for missing SNR×CQI keys (nearest along snr, then nearest cqi)")
     args = ap.parse_args()
 
     out = Path(args.output_dir)
