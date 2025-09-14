@@ -1,0 +1,37 @@
+{
+  "model_threshold": {
+    "accept_rate": 1.0,
+    "violation": 0.42357295751571655,
+    "throughput_expected": 2.7717366218566895,
+    "throughput_realized": 2.7717366218566895,
+    "avg_mcs": 18.035765
+  },
+  "model_throughput": {
+    "accept_rate": 1.0,
+    "violation": 0.4461098313331604,
+    "throughput_expected": 3.2591962814331055,
+    "throughput_realized": 3.2591962814331055,
+    "avg_mcs": 26.5604
+  },
+  "baseline_cqi": {
+    "accept_rate": 1.0,
+    "violation": 0.999984622001648,
+    "throughput_expected": 1.1409541002649348e-05,
+    "throughput_realized": 1.1409541002649348e-05,
+    "avg_mcs": 0.70825
+  },
+  "baseline_cqi_olla": {
+    "accept_rate": 1.0,
+    "violation": 0.9999992251396179,
+    "throughput_expected": 1.840832482002952e-07,
+    "throughput_realized": 1.840832482002952e-07,
+    "avg_mcs": 0.0
+  },
+  "baseline_snr_cqi_table": {
+    "accept_rate": 1.0,
+    "violation": 0.460213840007782,
+    "throughput_expected": 3.255585193634033,
+    "throughput_realized": 3.255585193634033,
+    "avg_mcs": 27.0
+  }
+}

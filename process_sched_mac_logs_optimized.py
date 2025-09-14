@@ -394,6 +394,97 @@ def process_log_file_optimized(log_file, output_file, max_window_ms=50, verbose=
     # Build results DataFrame
     return build_results_dataframe_with_measurements(correlations, unmatched_pdsch, dl_measurements, ul_measurements, output_file, skip_measurements=False)
 
+def calculate_throughput_metrics(df):
+    """
+    Calculate throughput and trueput metrics with proper HARQ process tracking.
+    
+    Throughput: All transmitted data (includes retransmissions)
+    Trueput: Successfully delivered data, accounting for retransmission overhead
+    
+    Uses proper kbps calculation (÷1024) and correctly tracks HARQ processes.
+    """
+    print("📊 Calculating throughput metrics with improved HARQ process tracking...")
+    
+    # Sort by timestamp to ensure proper temporal order
+    df = df.sort_values('pdsch_timestamp').reset_index(drop=True)
+    
+    # Calculate instantaneous bitrates (convert to Mbps for readability)
+    # Mbps = (TBS_bytes * 8) / 1024 / 1000
+    df['instantaneous_throughput_mbps'] = df['tbs'] * 8 / 1024 / 1000
+    df['instantaneous_trueput_mbps'] = 0.0  # Will be calculated based on ACK status
+    
+    # For trueput: each ACK'd transmission gets credit for its payload
+    # This represents successfully delivered data regardless of retransmissions
+    ack_mask = (df['ack_status'] == 1.0)  # ACK = 1.0
+    df.loc[ack_mask, 'instantaneous_trueput_mbps'] = df.loc[ack_mask, 'instantaneous_throughput_mbps']
+    
+    # Alternative approach: Track HARQ process efficiency
+    # Group by HARQ process to understand retransmission patterns
+    df['harq_process_key'] = df['ue_id'].astype(str) + '_' + df['rnti'].astype(str) + '_' + df['harq_id'].astype(str)
+    
+    # Calculate HARQ process statistics
+    harq_stats = {}
+    total_harq_attempts = 0
+    successful_harq_deliveries = 0
+    
+    for harq_key in df['harq_process_key'].unique():
+        harq_transmissions = df[df['harq_process_key'] == harq_key].sort_values('pdsch_timestamp')
+        
+        # Count transmission attempts and successful deliveries for this HARQ process
+        attempts = len(harq_transmissions)
+        acks = (harq_transmissions['ack_status'] == 1.0).sum()
+        
+        harq_stats[harq_key] = {
+            'attempts': attempts,
+            'acks': acks,
+            'efficiency': acks / attempts if attempts > 0 else 0
+        }
+        
+        total_harq_attempts += attempts
+        successful_harq_deliveries += acks
+    
+    # Calculate cumulative throughput and trueput over time
+    df['cumulative_throughput_mbits'] = df['instantaneous_throughput_mbps'].cumsum()
+    df['cumulative_trueput_mbits'] = df['instantaneous_trueput_mbps'].cumsum()
+    
+    # Calculate efficiency metrics
+    total_throughput = df['instantaneous_throughput_mbps'].sum()
+    total_trueput = df['instantaneous_trueput_mbps'].sum()
+    
+    if total_throughput > 0:
+        overall_efficiency = total_trueput / total_throughput
+        df['harq_efficiency'] = overall_efficiency
+        print(f"📈 HARQ Efficiency: {overall_efficiency*100:.2f}% "
+              f"(Trueput: {total_trueput:.1f} Mbits, Throughput: {total_throughput:.1f} Mbits)")
+        print(f"📊 HARQ Statistics: {successful_harq_deliveries}/{total_harq_attempts} "
+              f"successful deliveries ({successful_harq_deliveries/total_harq_attempts*100:.1f}%)")
+    else:
+        df['harq_efficiency'] = 0.0
+        print("⚠️  No throughput data found")
+    
+    # Add windowed throughput calculations (per second)
+    df['window_start_time'] = df['pdsch_time_relative_s'].apply(lambda x: int(x))
+    
+    # Calculate per-second aggregated rates
+    throughput_per_sec = df.groupby('window_start_time').agg({
+        'instantaneous_throughput_mbps': 'sum',
+        'instantaneous_trueput_mbps': 'sum'
+    }).rename(columns={
+        'instantaneous_throughput_mbps': 'throughput_mbps_per_sec',
+        'instantaneous_trueput_mbps': 'trueput_mbps_per_sec'
+    })
+    
+    # Merge back to main dataframe
+    df = df.merge(throughput_per_sec, left_on='window_start_time', right_index=True, how='left')
+    
+    print(f"✅ Throughput metrics calculated for {len(df)} transmissions")
+    print(f"   - Unique HARQ processes: {len(harq_stats)}")
+    print(f"   - ACK'd transmissions: {(df['ack_status'] == 1.0).sum()}")
+    print(f"   - NACK'd transmissions: {(df['ack_status'] == 0.0).sum()}")
+    print(f"   - DTX transmissions: {(df['ack_status'] == 2.0).sum()}")
+    
+    return df
+
 def build_results_dataframe_with_measurements(correlations, unmatched_pdsch, dl_measurements, ul_measurements, output_file, skip_measurements=False):
     """Build and save results DataFrame with DL and UL measurements."""
     results = []
@@ -641,6 +732,9 @@ def build_results_dataframe_with_measurements(correlations, unmatched_pdsch, dl_
     
     # Calculate BLER (running average) - only count NACK (ack_status=0) as errors
     df['bler'] = (df['ack_status'] == 0.0).cumsum() / (df.index + 1) * 100
+    
+    # Calculate throughput metrics with proper HARQ process tracking
+    df = calculate_throughput_metrics(df)
     
     # Save to CSV
     df.to_csv(output_file, index=False)

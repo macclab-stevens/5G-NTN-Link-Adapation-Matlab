@@ -1,3 +1,5 @@
 *.csv
 *.gz
 *.log
+*.parquet
+/ML/data/

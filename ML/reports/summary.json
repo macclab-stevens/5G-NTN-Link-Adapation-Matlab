@@ -1,0 +1,44 @@
+{
+  "predictive": {
+    "logloss": 0.015090899541974068,
+    "accuracy": 0.99558
+  },
+  "probability": {
+    "rows": 200000,
+    "mae": 0.007487488444894552,
+    "mse": 0.003739154664799571,
+    "rmse": 0.0611486276608034,
+    "ece": 0.0004936266189592425
+  },
+  "meta": {
+    "features": [
+      "slot_percent",
+      "slot",
+      "ele_angle",
+      "pathloss",
+      "snr",
+      "cqi",
+      "window",
+      "target_bler",
+      "mcs"
+    ],
+    "train_rows": 2000000,
+    "test_rows": 500000,
+    "device_used": "cpu",
+    "best_iteration": 410,
+    "threshold": 0.6499999761581421,
+    "calibrate_target": 0.1
+  },
+  "at_threshold": {
+    "threshold": 0.6499999761581421,
+    "accept_rate": 0.00195,
+    "violation": 0.07948717948717948,
+    "obs_throughput": 6979.3642578125,
+    "exp_throughput": 7035.64111328125
+  },
+  "worst_slice_at_threshold": {
+    "slice": -2.0,
+    "violation": 0.4444444444444444,
+    "accept_rate": 0.0012875536480686696
+  }
+}
