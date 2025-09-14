@@ -7,6 +7,7 @@ requires-python = ">=3.10"
 dependencies = [
     "matplotlib>=3.10.6",
     "numpy>=2.2.6",
+    "pandas>=2.3.2",
     "polars>=1.33.1",
     "pooch>=1.8.2",
     "pyarrow>=21.0.0",

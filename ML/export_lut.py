@@ -64,8 +64,14 @@ def main() -> None:
     ap.add_argument("--out", type=str, default="data/snr_cqi_lut.csv")
     ap.add_argument("--model", type=str, default="models/xgb_mcs_pass.json")
     ap.add_argument("--meta", type=str, default="models/model_meta.json")
-    ap.add_argument("--objective", type=str, default="threshold", choices=["threshold", "throughput"])
-    ap.add_argument("--threshold", type=float, default=-1.0, help="If <0, use threshold from model meta (if present) or 0.5")
+    ap.add_argument("--objective", type=str, default="threshold", choices=["threshold", "throughput"], help="LUT selection objective per (snr,cqi) bin")
+    ap.add_argument("--threshold", type=float, default=-1.0, help="Threshold for threshold objective. If <0, use model meta or 0.5")
+    ap.add_argument("--pass-quantile", type=float, default=-1.0, help="If >=0, aggregate P(pass) by this quantile (e.g., 0.1 for q10) instead of mean")
+    ap.add_argument("--min-pass-guardrail", type=float, default=-1.0, help="If >=0, restrict candidates to P(pass)≥guardrail (mainly for throughput objective)")
+    ap.add_argument("--select-rule", type=str, default="highest_feasible", choices=["highest_feasible", "max_prob_feasible", "lowest_feasible"], help="When multiple MCS meet feasibility, choose largest, highest P(pass), or lowest index")
+    ap.add_argument("--prob-margin", type=float, default=0.0, help="Extra probability margin added to threshold/guardrail (e.g., 0.05 requires p ≥ τ+0.05)")
+    ap.add_argument("--mcs-min", type=int, default=0, help="Minimum allowed MCS in LUT output")
+    ap.add_argument("--mcs-max", type=int, default=27, help="Maximum allowed MCS in LUT output (hard cap)")
     ap.add_argument("--snr-bin", type=float, default=0.1)
     ap.add_argument("--cqi-bin", type=float, default=1.0)
     ap.add_argument("--min-count", type=int, default=500, help="Minimum rows per (snr,cqi) bin to include")
@@ -129,13 +135,44 @@ def main() -> None:
         idx = order[a:b]
         if idx.size < args.min_count:
             continue
-        p_mean = preds[idx].mean(axis=0)
-        if args.objective == "throughput":
-            score = p_mean * eff
-            m = int(np.argmax(score))
+        # Aggregate per-MCS probability across rows in this bin
+        if args.pass_quantile is not None and args.pass_quantile >= 0.0:
+            p_stat = np.quantile(preds[idx], float(args.pass_quantile), axis=0)
         else:
-            feas = np.where(p_mean >= thr)[0]
-            m = int(feas.max()) if feas.size > 0 else int(np.argmax(p_mean))
+            p_stat = preds[idx].mean(axis=0)
+        if args.objective == "throughput":
+            # Optional guardrail: only consider candidates meeting min-pass
+            if args.min_pass_guardrail is not None and args.min_pass_guardrail >= 0.0:
+                guard = float(args.min_pass_guardrail) + float(max(0.0, args.prob_margin))
+                feas = np.where(p_stat >= guard)[0]
+                if feas.size > 0:
+                    score = p_stat * eff
+                    if args.select_rule == "max_prob_feasible":
+                        m = int(feas[np.argmax(p_stat[feas])])
+                    elif args.select_rule == "lowest_feasible":
+                        m = int(feas.min())
+                    else:
+                        m = int(feas[np.argmax(score[feas])])
+                else:
+                    # Fallback: pick best by P(pass)
+                    m = int(np.argmax(p_stat))
+            else:
+                score = p_stat * eff
+                m = int(np.argmax(score))
+        else:
+            req = float(thr) + float(max(0.0, args.prob_margin))
+            feas = np.where(p_stat >= req)[0]
+            if feas.size > 0:
+                if args.select_rule == "max_prob_feasible":
+                    m = int(feas[np.argmax(p_stat[feas])])
+                elif args.select_rule == "lowest_feasible":
+                    m = int(feas.min())
+                else:
+                    m = int(feas.max())
+            else:
+                m = int(np.argmax(p_stat))
+        # Clamp to allowed range
+        m = int(max(args.mcs_min, min(args.mcs_max, m)))
         records.append({
             "snr": float(sc_sorted[a]) * snr_bin,
             "cqi": float(cc_sorted[a]) * cqi_bin,
