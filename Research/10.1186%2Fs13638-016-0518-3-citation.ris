@@ -1,0 +1,18 @@
+TY  - JOUR
+AU  - Blanquez-Casado, Francisco
+AU  - Gomez, Gerardo
+AU  - Aguayo-Torres, Maria del Carmen
+AU  - Entrambasaguas, Jose Tomas
+PY  - 2016
+DA  - 2016/01/16
+TI  - eOLLA: an enhanced outer loop link adaptation for cellular networks
+JO  - EURASIP Journal on Wireless Communications and Networking
+SP  - 20
+VL  - 2016
+IS  - 1
+AB  - Link adaptation (LA) process is a core feature for the downlink of 3GPP long-term evolution (LTE) and LTE-advanced (LTE-A). Through a channel quality indicator (CQI), the receiver suggests to the base station (BS) an appropriate modulation and coding scheme (MCS) according to the current channel conditions. In order to overcome any non-ideality in this process, the outer loop link adaptation (OLLA) algorithm is used to adaptively modify the mapping from signal-to-noise ratio (SNR) to CQI. OLLA basically modifies the measured SNR by an offset, according to whether data packets are received correctly or not, in order to adjust the average block error rate (aBLER) to a target. Although the OLLA technique has been extensively used, there exists a lack of analysis in the literature about its dynamics and convergence conditions. In this paper, a deep analysis of this algorithm has been carried out in order to cover this gap. From this analysis, we propose a new approach to the OLLA, the enhanced OLLA (eOLLA), which is able to adaptively modify its step size as well as to update its offset according to the reception conditions even if no data packets have been received. Thus, for LTE- and LTE-A-realistic scenarios, simulation results show that the proposed eOLLA outperforms the traditional OLLA, achieving a performance gain of up to a 15 % in terms of throughput.
+SN  - 1687-1499
+UR  - https://doi.org/10.1186/s13638-016-0518-3
+DO  - 10.1186/s13638-016-0518-3
+ID  - Blanquez-Casado2016
+ER  - 
