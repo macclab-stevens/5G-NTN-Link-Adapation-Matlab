@@ -62,7 +62,8 @@ function [mod,Qm,tcr,mcs,wtx] = MCS_Allo_Algo1(carrier,pdsch,pdschExt,csiReport,
     % if alg.CSIReportMode == "AI CSI compression" 
     %     [csiEncoder,csiDecoder,~,autoEncOptions] = hLoadAINetwork(alg.AINetworkFilename);
     % end
-    lut = readtable('snr_cqi_lut_dense_v2.csv'); % Assumes headers: snr, cqi, mcs
+    lut = readtable('../ML/data/snr_cqi_lut_empirical.csv'); % Assumes headers: snr, cqi, mcs
+    % /Users/ericforbes/Documents/GitHub/5G-NTN-Link-Adapation-Matlab/ML/data
     if alg.CSIReportMode == "RI-PMI-CQI"
         csiReportConfig = alg.CSIReportConfig;
         % disp("HI")
@@ -71,9 +72,9 @@ function [mod,Qm,tcr,mcs,wtx] = MCS_Allo_Algo1(carrier,pdsch,pdschExt,csiReport,
         % lut.cqi
         % csiReport.CQI
         
-        row = lut(lut.snr == snr_val & lut.cqi == csiReport.CQI, :);
+        row = lut(round(lut.snr,1) == snr_val & lut.cqi == csiReport.CQI, :);
         if ~isempty(row)
-            disp(sprintf('SNR:%f,CQI:%f,NewCQI:%f\n', snr_val, csiReport.CQI, row.mcs));
+            % disp(sprintf('SNR:%f,CQI:%f,NewCQI:%f\n', snr_val, csiReport.CQI, row.mcs));
             csiReport.CQI = row.mcs;
             if csiReport.CQI>15
                 csiReport.CQI=15

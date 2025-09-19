@@ -1,13 +1,18 @@
-b   = Case9MCSThroughputCalulation240524212808;
+% b   = Case9MCSThroughputCalulation240524212808;
 % w10 = Case9MCSThroughputCalulationBLERw10Tbler0;
 % w50 = Case9MCSThroughputCalulationBLERw50Tbler0;
 % w100 = Case9MCSThroughputCalulationBLERw100Tbler0;
 % w200 = Case9MCSThroughputCalulationBLERw200Tbler0;
 % w1000 = Case9MCSThroughputCalulationBLERw1000Tbler0;
-w20001 = Case9MCSThroughputCalulationBLERw2000Tbler0
-w2001 = Case9MCSThroughputCalulationBLERw2000Tbler1
-w2005 = Case9MCSThroughputCalulationBLERw2000Tbler2;
-w2010 = Case9MCSThroughputCalulationBLERw2000Tbler3;
+% w20001 = Case9MCSThroughputCalulationBLERw2000Tbler0
+% w2001 = Case9MCSThroughputCalulationBLERw2000Tbler1
+% w2005 = Case9MCSThroughputCalulationBLERw2000Tbler2;
+% w2010 = Case9MCSThroughputCalulationBLERw2000Tbler3;
+b = readtable('../Archive/Result_baseline.csv')
+w20001 = readtable('Case9_MCS_ThroughputCalulation_BLERw2000Tbler0.01_240603_133217.csv');
+w2001 = readtable('Case9_MCS_ThroughputCalulation_BLERw2000Tbler0.1_240603_133230.csv');
+w2005 = readtable('Case9_MCS_ThroughputCalulation_BLERw2000Tbler0.5_240603_133243.csv');
+w2010 = readtable('Case9_MCS_ThroughputCalulation_BLERw2000Tbler0.1_240603_133256.csv');
 % 
 % blue = [0 0.4470 0.7410] 
 % orange = [0.8500 0.3250 0.0980] 
