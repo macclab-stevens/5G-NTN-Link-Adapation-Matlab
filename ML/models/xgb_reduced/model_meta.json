@@ -1,0 +1,15 @@
+{
+  "features": [
+    "snr",
+    "pathloss",
+    "cqi",
+    "ele_angle",
+    "mcs"
+  ],
+  "train_rows": 2000000,
+  "test_rows": 500000,
+  "device_used": "cpu",
+  "best_iteration": 463,
+  "threshold": 0.8500000238418579,
+  "calibrate_target": 0.1
+}

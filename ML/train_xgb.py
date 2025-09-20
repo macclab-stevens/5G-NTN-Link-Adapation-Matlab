@@ -14,17 +14,8 @@ def ensure_dir(p: Path) -> None:
 
 
 def get_feature_list(df_cols: List[str]) -> List[str]:
-    # Use only the specified context inputs plus MCS
-    base = [
-        "slot_percent",
-        "slot",
-        "ele_angle",
-        "pathloss",
-        "snr",
-        "cqi",
-        "window",
-        "target_bler",
-    ]
+    """Return the restricted feature set used by the updated pipeline."""
+    base = ["snr", "cqi"]
     feats = [c for c in base if c in df_cols]
     feats.append("mcs")  # include MCS for conditional pass modeling
     return feats
@@ -188,15 +179,13 @@ def main() -> None:
 
     # Monotone constraints (match feature order in meta)
     if args.monotone:
-        # Feature order from feats: [slot_percent, slot, ele_angle, pathloss, snr, cqi, window, target_bler, mcs]
-        # We enforce: pathloss (-1), snr (+1), cqi (+1), target_bler (+1), mcs (-1); others neutral (0)
-        mono = [0, 0, 0, -1, +1, +1, 0, +1, -1]
-        if len(feats) != len(mono):
-            # Fallback: pad/trim to length
-            if len(feats) < len(mono):
-                mono = mono[:len(feats)]
-            else:
-                mono = mono + [0] * (len(feats) - len(mono))
+        # Feature order now: [snr, cqi, mcs]
+        mono_map = {
+            "snr": +1,
+            "cqi": +1,
+            "mcs": -1,
+        }
+        mono = [mono_map.get(f, 0) for f in feats]
         params["monotone_constraints"] = "(" + ",".join(str(int(v)) for v in mono) + ")"
 
     # Device auto-detect: try CUDA if requested or auto
