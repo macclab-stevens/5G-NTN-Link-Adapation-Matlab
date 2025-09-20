@@ -46,7 +46,13 @@ def main() -> None:
     ap.add_argument("--objective", type=str, default="threshold", choices=["threshold", "throughput"], help="Selection objective per bin")
     ap.add_argument("--threshold", type=float, default=0.9, help="Pass-rate threshold for threshold objective")
     ap.add_argument("--min-pass-guardrail", type=float, default=-1.0, help="If >=0, restrict throughput objective to pass_rate ≥ guardrail")
-    ap.add_argument("--select-rule", type=str, default="highest_feasible", choices=["highest_feasible","max_prob_feasible"], help="Tie-breaker among feasible MCS (by index or by pass rate)")
+    ap.add_argument(
+        "--select-rule",
+        type=str,
+        default="highest_feasible",
+        choices=["highest_feasible", "max_prob_feasible", "lowest_feasible"],
+        help="Tie-breaker among feasible MCS (by index, by pass rate, or by lowest index)",
+    )
     ap.add_argument("--prob-margin", type=float, default=0.0, help="Extra margin added to threshold/guardrail feasibility")
     ap.add_argument("--snr-bin", type=float, default=0.1)
     ap.add_argument("--cqi-bin", type=float, default=1.0)
@@ -115,8 +121,12 @@ def main() -> None:
             if guard is not None:
                 feas = sub[sub["pass_rate"] >= guard]
                 if not feas.empty:
-                    # pick by highest throughput among feasible
-                    m = int(feas.loc[feas["obs_tput"].idxmax(), "mcs"]) if args.select_rule == "highest_feasible" else int(feas.loc[feas["pass_rate"].idxmax(), "mcs"])  # tie-breaker allows alt rule
+                    if args.select_rule == "max_prob_feasible":
+                        m = int(feas.loc[feas["pass_rate"].idxmax(), "mcs"])
+                    elif args.select_rule == "lowest_feasible":
+                        m = int(feas["mcs"].min())
+                    else:
+                        m = int(feas.loc[feas["obs_tput"].idxmax(), "mcs"])
                 else:
                     m = int(sub.loc[sub["pass_rate"].idxmax(), "mcs"])  # fallback: max pass rate
             else:
@@ -126,6 +136,8 @@ def main() -> None:
             if not feas.empty:
                 if args.select_rule == "max_prob_feasible":
                     m = int(feas.loc[feas["pass_rate"].idxmax(), "mcs"])  # most reliable among feasible
+                elif args.select_rule == "lowest_feasible":
+                    m = int(feas["mcs"].min())
                 else:
                     m = int(feas["mcs"].max())  # highest index among feasible
             else:
@@ -184,4 +196,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

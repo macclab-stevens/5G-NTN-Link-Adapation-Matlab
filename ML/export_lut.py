@@ -1,18 +1,30 @@
 #!/usr/bin/env python3
 """
-Export a 2D SNR×CQI → MCS lookup table derived from a trained model and a
-dataset. The LUT can then be evaluated against the model using
-compare_baselines.py via --snr-cqi-lut.
+Export a 2D SNR×CQI → MCS lookup table derived from either
 
-Strategy per (snr_bin, cqi_bin):
-  - Compute average P(pass | context, mcs) across rows within the bin
+1. a pass-probability model (default, identical to the historical script), or
+2. a direct SNR/CQI classifier such as the monotonic booster trained by
+   train_mcs_mono_xgb.py.
+
+The LUT can then be evaluated against the model using compare_baselines.py via
+--snr-cqi-lut.
+
+Pass-probability strategy per (snr_bin, cqi_bin):
+  - Compute aggregate P(pass | context, mcs) across rows within the bin
   - Objective=throughput: choose argmax_m E[P(pass)] * spectral_efficiency(m)
   - Objective=threshold: choose highest m with E[P(pass)] ≥ τ; fallback to argmax E[P(pass)]
 
-Usage:
-  uv run python export_lut.py \
-    --data features/test.parquet --out data/snr_cqi_lut.csv \
+Classifier strategy per (snr_bin, cqi_bin):
+  - Quantize rows into bins and feed representative (snr, cqi) pairs to the
+    classifier to obtain the recommended MCS directly.
+
+Usage examples:
+  uv run python export_lut.py --data features/test.parquet --out data/snr_cqi_lut.csv \
     --objective throughput --snr-bin 0.1 --cqi-bin 1 --sample 200000
+
+  uv run python export_lut.py --mode classifier --model models/mcs15_xgb_empirical_low/model.json \
+    --class-index models/mcs15_xgb_empirical_low/class_index.json --classifier-features snr,cqi \
+    --data features/all.parquet --out data/snr_cqi_lut_classifier.csv --snr-bin 0.1 --cqi-bin 1
 """
 
 from __future__ import annotations
@@ -27,6 +39,10 @@ import polars as pl
 import xgboost as xgb
 
 from mcs_tables import spectral_efficiency
+
+
+def parse_feature_list(raw: str) -> list[str]:
+    return [f.strip() for f in raw.split(",") if f.strip()]
 
 
 def load_features_list(model_meta_path: Path) -> list[str]:
@@ -64,6 +80,9 @@ def main() -> None:
     ap.add_argument("--out", type=str, default="data/snr_cqi_lut.csv")
     ap.add_argument("--model", type=str, default="models/xgb_mcs_pass.json")
     ap.add_argument("--meta", type=str, default="models/model_meta.json")
+    ap.add_argument("--mode", type=str, default="pass", choices=["pass", "classifier"], help="LUT policy: pass-probability (default) or direct classifier")
+    ap.add_argument("--class-index", type=str, default="", help="Path to classifier class-index JSON (required when --mode classifier)")
+    ap.add_argument("--classifier-features", type=str, default="snr,cqi", help="Comma-separated feature order for classifier input")
     ap.add_argument("--objective", type=str, default="threshold", choices=["threshold", "throughput"], help="LUT selection objective per (snr,cqi) bin")
     ap.add_argument("--threshold", type=float, default=-1.0, help="Threshold for threshold objective. If <0, use model meta or 0.5")
     ap.add_argument("--pass-quantile", type=float, default=-1.0, help="If >=0, aggregate P(pass) by this quantile (e.g., 0.1 for q10) instead of mean")
@@ -84,7 +103,23 @@ def main() -> None:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    feats = load_features_list(Path(args.meta))
+    classes_arr = None
+    if args.mode == "classifier":
+        feats = parse_feature_list(args.classifier_features)
+        if not feats:
+            raise SystemExit("Classifier mode requires at least one feature (e.g., 'snr,cqi').")
+        if "snr" not in feats or "cqi" not in feats:
+            raise SystemExit("Classifier mode expects features to include both 'snr' and 'cqi'.")
+        class_index_path = Path(args.class_index)
+        if not class_index_path.exists():
+            raise SystemExit("Classifier mode requires --class-index pointing to class_index.json.")
+        class_index = json.loads(class_index_path.read_text())
+        classes = class_index.get("classes")
+        if not classes:
+            raise SystemExit("class_index.json must contain a 'classes' list.")
+        classes_arr = np.array(classes, dtype=np.int32)
+    else:
+        feats = load_features_list(Path(args.meta))
     lf = pl.scan_parquet(args.data)
     have = lf.columns
     need = [c for c in feats if c in have]
@@ -112,8 +147,9 @@ def main() -> None:
             thr = 0.5
 
     # Predictions for all MCS
-    preds = batch_predict_all_mcs(df, feats, bst)  # shape: (n, 28)
-    eff = np.array([spectral_efficiency(m) for m in range(28)], dtype=np.float32)
+    if args.mode == "pass":
+        preds = batch_predict_all_mcs(df, feats, bst)  # shape: (n, 28)
+        eff = np.array([spectral_efficiency(m) for m in range(28)], dtype=np.float32)
 
     # Bin snr and cqi
     snr_bin = float(args.snr_bin)
@@ -131,9 +167,16 @@ def main() -> None:
     starts = np.concatenate(([0], np.nonzero(change)[0] + 1))
     ends = np.concatenate((starts[1:], [sc_sorted.shape[0]]))
     records = []
+    classifier_bins: list[tuple[float, float]] = []
     for a, b in zip(starts, ends):
         idx = order[a:b]
         if idx.size < args.min_count:
+            continue
+        snr_val = float(sc_sorted[a]) * snr_bin
+        cqi_val = float(cc_sorted[a]) * cqi_bin
+
+        if args.mode == "classifier":
+            classifier_bins.append((snr_val, cqi_val))
             continue
         # Aggregate per-MCS probability across rows in this bin
         if args.pass_quantile is not None and args.pass_quantile >= 0.0:
@@ -174,10 +217,34 @@ def main() -> None:
         # Clamp to allowed range
         m = int(max(args.mcs_min, min(args.mcs_max, m)))
         records.append({
-            "snr": float(sc_sorted[a]) * snr_bin,
-            "cqi": float(cc_sorted[a]) * cqi_bin,
+            "snr": snr_val,
+            "cqi": cqi_val,
             "mcs": int(m),
         })
+
+    if args.mode == "classifier":
+        if not classifier_bins:
+            raise SystemExit("No bins met --min-count; cannot export LUT.")
+        feature_index = {name: j for j, name in enumerate(feats)}
+        X = np.zeros((len(classifier_bins), len(feats)), dtype=np.float32)
+        for i, (snr_val, cqi_val) in enumerate(classifier_bins):
+            if "snr" in feature_index:
+                X[i, feature_index["snr"]] = snr_val
+            if "cqi" in feature_index:
+                X[i, feature_index["cqi"]] = cqi_val
+        dclass = xgb.DMatrix(X, feature_names=feats)
+        proba = bst.predict(dclass)
+        if proba.ndim == 1:
+            pred_idx = (proba >= 0.5).astype(int)
+        else:
+            pred_idx = np.argmax(proba, axis=1)
+        mcs_pred = classes_arr[pred_idx]
+        for (snr_val, cqi_val), m in zip(classifier_bins, mcs_pred, strict=False):
+            records.append({
+                "snr": snr_val,
+                "cqi": cqi_val,
+                "mcs": int(m),
+            })
 
     # Optional: fill CQI grid per SNR using nearest-neighbor along CQI
     if args.fill_cqi_grid and records:
