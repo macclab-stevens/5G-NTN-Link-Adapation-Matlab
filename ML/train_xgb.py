@@ -66,6 +66,11 @@ def main() -> None:
     ap.add_argument("--num-rounds", type=int, default=1500, help="Boosting rounds")
     ap.add_argument("--early-stopping", type=int, default=100, help="Early stopping rounds")
     ap.add_argument("--export-recs", action="store_true", help="Export per-row recommended MCS on test set")
+    ap.add_argument("--balance", action="store_true", help="Auto-balance classes via scale_pos_weight = (neg/pos) computed on train")
+    ap.add_argument("--mcs-min", type=int, default=None, help="If set, filter rows with mcs < mcs_min")
+    ap.add_argument("--mcs-max", type=int, default=None, help="If set, filter rows with mcs > mcs_max")
+    ap.add_argument("--monotone", action="store_true", help="Apply monotone constraints (+snr,+cqi,+target_bler,-pathloss,-mcs; others neutral)")
+    ap.add_argument("--reg", action="store_true", help="Enable mild regularization (min_child_weight/reg_alpha/reg_lambda)")
     ap.add_argument("--threshold", type=float, default=0.5, help="Minimum pass probability to accept an MCS")
     ap.add_argument("--calibrate-target", type=float, default=None, help="Target violation rate on validation (e.g., 0.1). If set, calibrates and saves threshold.")
     args = ap.parse_args()
@@ -73,10 +78,23 @@ def main() -> None:
     out_dir = Path(args.output_dir)
     ensure_dir(out_dir)
 
+    # Helper to apply MCS filters
+    def _apply_mcs_filter(lf: pl.LazyFrame, cols: list[str]) -> pl.LazyFrame:
+        if (args.mcs_min is not None or args.mcs_max is not None) and ("mcs" in cols):
+            exprs = []
+            if args.mcs_min is not None:
+                exprs.append(pl.col("mcs") >= int(args.mcs_min))
+            if args.mcs_max is not None:
+                exprs.append(pl.col("mcs") <= int(args.mcs_max))
+            if exprs:
+                lf = lf.filter(pl.all_horizontal(exprs))
+        return lf
+
     # Determine input mode (combined vs separate)
     if args.data:
         lf = pl.scan_parquet(args.data)
         cols = lf.collect_schema().names()
+        lf = _apply_mcs_filter(lf, cols)
         feats = get_feature_list(cols)
         needed = feats + ["label_pass", "tbs"]
         lf = lf.select([c for c in needed if c in cols])
@@ -102,6 +120,9 @@ def main() -> None:
         lf_tr = pl.scan_parquet(args.train)
         lf_te = pl.scan_parquet(args.test)
         cols = lf_tr.collect_schema().names()
+        lf_tr = _apply_mcs_filter(lf_tr, cols)
+        cols_te = lf_te.collect_schema().names()
+        lf_te = _apply_mcs_filter(lf_te, cols_te)
         feats = get_feature_list(cols)
         needed = feats + ["label_pass", "tbs"]
         lf_tr = lf_tr.select([c for c in needed if c in cols])
@@ -133,9 +154,10 @@ def main() -> None:
     dvalid = xgb.DMatrix(X_test, label=y_test)
 
     # Params
+    # Base params
     params = {
         "objective": "binary:logistic",
-        "eval_metric": ["logloss"],
+        "eval_metric": ["logloss", "aucpr"],
         "max_depth": 8,
         "eta": 0.05,
         "subsample": 0.8,
@@ -144,6 +166,38 @@ def main() -> None:
         "nthread": os.cpu_count() or 8,
         "tree_method": "hist",
     }
+
+    # Mild regularization (optional)
+    if args.reg:
+        params.update({
+            "min_child_weight": 3,
+            "reg_alpha": 1e-3,
+            "reg_lambda": 1.0,
+        })
+
+    # Class imbalance handling (optional)
+    if args.balance:
+        pos = float((y_train >= 0.5).sum())
+        neg = float((y_train < 0.5).sum())
+        spw = (neg / max(1.0, pos)) if pos > 0 else 1.0
+        params["scale_pos_weight"] = spw
+        # Slightly stabilize with max_delta_step if extremely imbalanced
+        if spw > 10:
+            params["max_delta_step"] = 1
+        print(f"Using scale_pos_weight={spw:.2f} (neg/pos) for class balancing")
+
+    # Monotone constraints (match feature order in meta)
+    if args.monotone:
+        # Feature order from feats: [slot_percent, slot, ele_angle, pathloss, snr, cqi, window, target_bler, mcs]
+        # We enforce: pathloss (-1), snr (+1), cqi (+1), target_bler (+1), mcs (-1); others neutral (0)
+        mono = [0, 0, 0, -1, +1, +1, 0, +1, -1]
+        if len(feats) != len(mono):
+            # Fallback: pad/trim to length
+            if len(feats) < len(mono):
+                mono = mono[:len(feats)]
+            else:
+                mono = mono + [0] * (len(feats) - len(mono))
+        params["monotone_constraints"] = "(" + ",".join(str(int(v)) for v in mono) + ")"
 
     # Device auto-detect: try CUDA if requested or auto
     tried_cuda = False

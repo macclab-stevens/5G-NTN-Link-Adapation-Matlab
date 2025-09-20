@@ -1,0 +1,19 @@
+{
+  "features": [
+    "slot_percent",
+    "slot",
+    "ele_angle",
+    "pathloss",
+    "snr",
+    "cqi",
+    "window",
+    "target_bler",
+    "mcs"
+  ],
+  "train_rows": 2000000,
+  "test_rows": 500000,
+  "device_used": "cpu",
+  "best_iteration": 539,
+  "threshold": 0.9900000095367432,
+  "calibrate_target": 0.1
+}

@@ -77,6 +77,46 @@ MCS_Allo = 0;
 
 simParameters.SNRIn = [1]; % SNR range (dB)
 
+% Optional external overrides for automation (set by orchestrator)
+% Provide a struct named NTN_OVERRIDE with optional fields:
+%   NFrames, SNRIn, BLER_window, TargetBLER, SatelliteAltitude,
+%   OutputDir, Seed, LogEveryNSlots
+try
+    if exist('NTN_OVERRIDE','var') && isstruct(NTN_OVERRIDE)
+        if isfield(NTN_OVERRIDE,'NFrames'),            simParameters.NFrames = NTN_OVERRIDE.NFrames; end
+        if isfield(NTN_OVERRIDE,'SNRIn'),              simParameters.SNRIn = NTN_OVERRIDE.SNRIn; end
+        if isfield(NTN_OVERRIDE,'BLER_window'),        BLER_window = NTN_OVERRIDE.BLER_window; end
+        if isfield(NTN_OVERRIDE,'TargetBLER'),         TargetBLER = NTN_OVERRIDE.TargetBLER; end
+        if isfield(NTN_OVERRIDE,'SatelliteAltitude'),  simParameters.SatelliteAltitude = NTN_OVERRIDE.SatelliteAltitude; end
+        if isfield(NTN_OVERRIDE,'Seed'),               rng(NTN_OVERRIDE.Seed,'twister'); end
+        if isfield(NTN_OVERRIDE,'OutputDir'),          output_dir_override = NTN_OVERRIDE.OutputDir; else, output_dir_override = ""; end
+        if isfield(NTN_OVERRIDE,'LogEveryNSlots'),     logEverySlots = NTN_OVERRIDE.LogEveryNSlots; else, logEverySlots = 1000; end
+    else
+        output_dir_override = ""; logEverySlots = 1000;
+    end
+catch
+    output_dir_override = ""; logEverySlots = 1000;
+end
+
+% Optional external overrides for automation (set by orchestrator)
+% Provide a struct named NTN_OVERRIDE with optional fields:
+%   NFrames, SNRIn, BLER_window, TargetBLER, SatelliteAltitude, OutputDir, Seed
+try
+    if exist('NTN_OVERRIDE','var') && isstruct(NTN_OVERRIDE)
+        if isfield(NTN_OVERRIDE,'NFrames'),            simParameters.NFrames = NTN_OVERRIDE.NFrames; end
+        if isfield(NTN_OVERRIDE,'SNRIn'),              simParameters.SNRIn = NTN_OVERRIDE.SNRIn; end
+        if isfield(NTN_OVERRIDE,'BLER_window'),        BLER_window = NTN_OVERRIDE.BLER_window; end
+        if isfield(NTN_OVERRIDE,'TargetBLER'),         TargetBLER = NTN_OVERRIDE.TargetBLER; end
+        if isfield(NTN_OVERRIDE,'SatelliteAltitude'),  simParameters.SatelliteAltitude = NTN_OVERRIDE.SatelliteAltitude; end
+        if isfield(NTN_OVERRIDE,'Seed'),               rng(NTN_OVERRIDE.Seed,'twister'); end
+        if isfield(NTN_OVERRIDE,'OutputDir'),          output_dir_override = NTN_OVERRIDE.OutputDir; else, output_dir_override = ""; end
+    else
+        output_dir_override = "";
+    end
+catch
+    output_dir_override = "";
+end
+
 %% Channel Estimator Configuration
 % The logical variable |PerfectChannelEstimator| controls channel estimation 
 % and synchronization behavior. When this variable is set to |true|, the simulation 
@@ -684,7 +724,7 @@ for snrIdx = 1:numel(simParameters.SNRIn)
             end
         end
     
-        modValue =1000;
+        modValue = logEverySlots;
         if mod(nslot,modValue) == 1 && nslot>5
             tocT = toc;
             seconds_remaining = (tocT/modValue)*(NSlots-1-nslot) ;
@@ -696,13 +736,30 @@ for snrIdx = 1:numel(simParameters.SNRIn)
     end  %for nslot:
     toc
     resultsTable = table(slotPercnt',slot',eleAnge',PathLoss',SNR',CQI_result',currentMCS',modOrder',TCR',transBlkSize',BLKErr',BLER_results',...
-        VariableNames=["slotPercnt","slot","eleAnge","PathLoss","SNR","CQI","MCS","MOD","TCR","TBS","BLKErr","BLER"])
+        VariableNames=["slotPercnt","slot","eleAnge","PathLoss","SNR","CQI","MCS","MOD","TCR","TBS","BLKErr","BLER"]);
+    % Add ML pipeline convenience columns
+    try
+        resultsTable.window = repmat(BLER_window,height(resultsTable),1);
+        resultsTable.Targetbler = repmat(TargetBLER,height(resultsTable),1);
+    catch
+        % tolerate if height is zero
+    end
     time = string(datetime('now','Format','yyMMdd_HHmmss'));
     tableName_arry = ["Case9_MCS_ThroughputCalulation_",'BLERw',BLER_window,'Tbler',TargetBLER,"_",time,".csv"];
     % BLER_window = 20;
     % TargetBLER = 0.05
-    tableName = join(tableName_arry,'')
-    writetable(resultsTable,tableName)
+    tableName = join(tableName_arry,'');
+    try
+        if exist('output_dir_override','var') && strlength(string(output_dir_override))>0
+            outPath = fullfile(char(output_dir_override), tableName);
+            writetable(resultsTable,outPath);
+        else
+            writetable(resultsTable,tableName);
+        end
+    catch ME
+        warning('Failed to write table to override path. Writing to CWD. (%s)', ME.message);
+        writetable(resultsTable,tableName);
+    end
     % Store CSI report for each SNR point
     CSIReport{snrIdx} = csiReports; %#ok<SAGROW>
     
