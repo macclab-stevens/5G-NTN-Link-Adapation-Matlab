@@ -1,10 +1,10 @@
 # LUT Catalog
 
+
 All lookup tables generated in this iteration are summarized below. For each LUT you’ll find the path, the command/script that produced it, the source data or model, and any post-processing such as rounding or clipping. Use this as the canonical reference when wiring MATLAB to a specific policy or when regenerating tables after a model retrain.
----
 
 ## SNR×CQI Classifier LUT
-**Path:** `ML/data/luts/xgb_snr_cqi_classifier/snr_cqi_lut_classifier.csv`
+**Path:** `ML/data/luts/snr_cqi_lut_classifier.csv`
 
 **Purpose:** Recommended 2-D table for MATLAB after we restricted learning to SNR and CQI only.
 
@@ -33,12 +33,30 @@ All lookup tables generated in this iteration are summarized below. For each LUT
      --class-index models/mcs_snr_cqi_dataset/class_index.json \
      --classifier-features snr,cqi \
      --data features/all.parquet \
-     --out data/luts/xgb_snr_cqi_classifier/snr_cqi_lut_classifier.csv \
+     --out ML/data/luts/snr_cqi_lut_classifier.csv \
      --snr-bin 0.2 --cqi-bin 1 --min-count 200 \
      --fill-cqi-grid --cqi-min 0 --cqi-max 15
    ```
 
 **Post-processing:** LUT values inherently lie in {2,…,9}; no extra clipping required.
+
+### High-Floor Variant
+**Path:** `ML/data/luts/snr_cqi_lut_classifier_low.csv`
+
+Same generation as above but with an explicit lower bound on the exported MCS indices:
+```bash
+uv run python export_lut.py --mode classifier \
+  --model models/mcs_snr_cqi_dataset/model.json \
+  --class-index models/mcs_snr_cqi_dataset/class_index.json \
+  --classifier-features snr,cqi \
+  --data features/all.parquet \
+  --out ML/data/luts/snr_cqi_lut_classifier_low.csv \
+  --snr-bin 0.2 --cqi-bin 1 --min-count 200 \
+  --fill-cqi-grid --cqi-min 0 --cqi-max 15 \
+  --mcs-min 4
+```
+
+**Use case:** MATLAB `MCS_Allo_Algo2.m` baseline that prefers to stay in the mid-MCS regime (4–9) for higher throughput.
 
 ---
 
@@ -124,7 +142,8 @@ uv run python export_lut.py \
 ## Quick Reference Table
 | LUT Path | Source | Method | MCS Range | Notes |
 | --- | --- | --- | --- | --- |
-| `data/luts/xgb_snr_cqi_classifier/snr_cqi_lut_classifier.csv` | `models/mcs_snr_cqi_dataset` | XGB classifier (`--mode classifier`) | 2–9 | Preferred 2-D LUT. |
+| `ML/data/luts/snr_cqi_lut_classifier.csv` | `models/mcs_snr_cqi_dataset` | XGB classifier (`--mode classifier`) | 2–9 | Preferred 2-D LUT. |
+| `ML/data/luts/snr_cqi_lut_classifier_low.csv` | `models/mcs_snr_cqi_dataset` | XGB classifier + `--mcs-min 4` | 4–9 | Mid-band MATLAB variant. |
 | `data/snr_cqi_lut_mcs15.csv` | `filter_snr_cqi_lut.py` on dense LUT | Rounding + clipping | 7–15 | Original dense table clipped. |
 | `data/snr_cqi_lut_empirical_thresh095_low_mcs15.csv` | `export_lut_empirical.py` | Empirical threshold (0.95, lowest feasible) | 1–11 | Conservative fallback. |
 | `data/polynomial_luts/snr_cqi_poly_lut.csv` | `polynomial_models.py` | Polynomial regression | 0–10 (after clamp) | Analytical baseline. |
