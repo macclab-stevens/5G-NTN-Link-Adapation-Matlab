@@ -62,7 +62,11 @@ function [mod,Qm,tcr,mcs,wtx] = MCS_Allo_Algo1(carrier,pdsch,pdschExt,csiReport,
     % if alg.CSIReportMode == "AI CSI compression" 
     %     [csiEncoder,csiDecoder,~,autoEncOptions] = hLoadAINetwork(alg.AINetworkFilename);
     % end
-    lut = readtable('../ML/data/snr_cqi_lut_classifier_low.csv'); % Assumes headers: snr, cqi, mcs
+
+    classifier='../ML/data/simTrainedLUTs/snr_cqi_lut_classifier.csv'
+    newton='../ML/data/simTrainedLUTs/snr_cqi_newton_lut.csv'
+    poly='..ML/data/simTrainedLUTs/snr_cqi_poly_lut.csv'
+    lut = readtable(poly); % Assumes headers: snr, cqi, mcs
     % /Users/ericforbes/Documents/GitHub/5G-NTN-Link-Adapation-Matlab/ML/data
     if alg.CSIReportMode == "RI-PMI-CQI"
         csiReportConfig = alg.CSIReportConfig;
