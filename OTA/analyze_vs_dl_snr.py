@@ -217,19 +217,65 @@ def plot_performance_vs_snr(data_dict, output_prefix):
     ax3.grid(True, alpha=0.3)
     ax3.legend()
     
-    # Plot 4: SNR Distribution
-    for i, (filename, data) in enumerate(data_dict.items()):
-        if 'df' in data and not data['df'].empty:
-            df = data['df']
-            color = colors[i % len(colors)]
-            
-            ax4.hist(df['dl_sinr'].values, bins=30, alpha=0.6, label=filename, color=color, edgecolor='black')
+    # Plot 4: Dual-axis MCS and Throughput vs SNR
+    ax4_twin = ax4.twinx()  # Create twin axis for throughput
     
+    # Colors for MCS (left axis) and Throughput (right axis)
+    mcs_color = 'tab:blue'
+    throughput_color = 'tab:red'
+    
+    mcs_lines = []
+    throughput_lines = []
+    
+    for i, (filename, data) in enumerate(data_dict.items()):
+        linestyle = '-' if i == 0 else '--' if i == 1 else '-.' if i == 2 else ':' if i == 3 else '-'
+        linewidth = 2.5 if i == 0 else 2.0
+        
+        # Plot Average MCS on left y-axis
+        if 'bler_stats' in data and not data['bler_stats'].empty:
+            bler_data = data['bler_stats']
+            marker = markers[i % len(markers)]
+            
+            mcs_line = ax4.plot(bler_data['snr_bin_center'].values, bler_data['avg_mcs'].values, 
+                              color=mcs_color, marker=marker, linestyle=linestyle, 
+                              label=f'{filename} (MCS)', linewidth=linewidth, markersize=6, alpha=0.8)
+            mcs_lines.extend(mcs_line)
+        
+        # Plot Average Throughput on right y-axis
+        if 'throughput_stats' in data and not data['throughput_stats'].empty:
+            throughput_data = data['throughput_stats']
+            marker = markers[i % len(markers)]
+            
+            # Use Mbps for better readability
+            if 'avg_throughput_mbps' in throughput_data.columns:
+                throughput_col = 'avg_throughput_mbps'
+            else:
+                # Fallback to kbps columns
+                throughput_col = 'avg_throughput_kbps' if 'avg_throughput_kbps' in throughput_data.columns else 'avg_bitrate_kbps'
+            
+            throughput_line = ax4_twin.plot(throughput_data['snr_bin_center'].values, throughput_data[throughput_col].values, 
+                                          color=throughput_color, marker=marker, linestyle=linestyle,
+                                          label=f'{filename} (Throughput)', linewidth=linewidth, markersize=6, alpha=0.8)
+            throughput_lines.extend(throughput_line)
+    
+    # Configure left y-axis (MCS)
     ax4.set_xlabel('DL SNR (dB)')
-    ax4.set_ylabel('Count')
-    ax4.set_title('DL SNR Distribution')
+    ax4.set_ylabel('Average MCS Index', color=mcs_color)
+    ax4.tick_params(axis='y', labelcolor=mcs_color)
     ax4.grid(True, alpha=0.3)
-    ax4.legend()
+    
+    # Configure right y-axis (Throughput)
+    throughput_label = 'Average Throughput (Mbps)' if 'mbps' in throughput_col else 'Average Throughput (kbps)'
+    ax4_twin.set_ylabel(throughput_label, color=throughput_color)
+    ax4_twin.tick_params(axis='y', labelcolor=throughput_color)
+    
+    # Set title
+    ax4.set_title('Average MCS and Throughput vs DL SNR')
+    
+    # Create combined legend
+    all_lines = mcs_lines + throughput_lines
+    all_labels = [line.get_label() for line in all_lines]
+    ax4.legend(all_lines, all_labels, loc='upper left', bbox_to_anchor=(0, 1))
     
     plt.tight_layout()
     
